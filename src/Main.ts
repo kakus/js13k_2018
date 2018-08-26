@@ -21,9 +21,82 @@ namespace qm
     export function cross(a: vec, b: vec) { return a.x * b.y - a.y * b.x; }
     export function sqr_dist(a: vec) { return a.x * a.x + a.y * a.y; }
 
+    // a, b - any two points
+    // @return top-left corner, bottom-right corner
     export function aabb(a: vec, b: vec): [vec, vec]
     {
         return [v(Math.min(a.x, b.x), Math.min(a.y, b.y)), v(Math.max(a.x, b.x), Math.max(a.y, b.y))];
+    }
+
+    export type mat = Float32Array;
+
+    export function mat(m00 = 1, m10 = 0, m01 = 0, m11 = 1, tx = 0, ty = 0): mat
+    {
+        return new Float32Array([m00, m10, 0, m01, m11, 0, tx, ty, 1]);
+    }
+
+    export function transform(v: vec, m: mat): vec
+    {
+        return qm.v(v.x * m[0] + v.y * m[3] + m[6], 
+                    v.x * m[1] + v.y * m[4] + m[7]);
+    }
+
+    export function mat_mul( a: mat, b: mat, out: mat ): void
+    {
+        var a00 = a[ 0 ], a01 = a[ 1 ], a02 = a[ 2 ],
+            a10 = a[ 3 ], a11 = a[ 4 ], a12 = a[ 5 ],
+            a20 = a[ 6 ], a21 = a[ 7 ], a22 = a[ 8 ],
+
+            b00 = b[ 0 ], b01 = b[ 1 ], b02 = b[ 2 ],
+            b10 = b[ 3 ], b11 = b[ 4 ], b12 = b[ 5 ],
+            b20 = b[ 6 ], b21 = b[ 7 ], b22 = b[ 8 ];
+
+        out[ 0 ] = b00 * a00 + b01 * a10 + b02 * a20;
+        out[ 1 ] = b00 * a01 + b01 * a11 + b02 * a21;
+        out[ 2 ] = b00 * a02 + b01 * a12 + b02 * a22;
+
+        out[ 3 ] = b10 * a00 + b11 * a10 + b12 * a20;
+        out[ 4 ] = b10 * a01 + b11 * a11 + b12 * a21;
+        out[ 5 ] = b10 * a02 + b11 * a12 + b12 * a22;
+
+        out[ 6 ] = b20 * a00 + b21 * a10 + b22 * a20;
+        out[ 7 ] = b20 * a01 + b21 * a11 + b22 * a21;
+        out[ 8 ] = b20 * a02 + b21 * a12 + b22 * a22;
+    };
+
+    /**
+     * @param out if doesn't provided it will override input matrix
+     */
+    export function mat_invert( a: mat, out = a ): mat
+    {
+        var a00 = a[ 0 ], a01 = a[ 1 ], a02 = a[ 2 ],
+            a10 = a[ 3 ], a11 = a[ 4 ], a12 = a[ 5 ],
+            a20 = a[ 6 ], a21 = a[ 7 ], a22 = a[ 8 ],
+
+            b01 = a22 * a11 - a12 * a21,
+            b11 = -a22 * a10 + a12 * a20,
+            b21 = a21 * a10 - a11 * a20,
+
+            // Calculate the determinant
+            det = a00 * b01 + a01 * b11 + a02 * b21;
+
+        if ( !det )
+        {
+            return null;
+        }
+        det = 1.0 / det;
+
+        out[ 0 ] = b01 * det;
+        out[ 1 ] = ( -a22 * a01 + a02 * a21 ) * det;
+        out[ 2 ] = ( a12 * a01 - a02 * a11 ) * det;
+        out[ 3 ] = b11 * det;
+        out[ 4 ] = ( a22 * a00 - a02 * a20 ) * det;
+        out[ 5 ] = ( -a12 * a00 + a02 * a10 ) * det;
+        out[ 6 ] = b21 * det;
+        out[ 7 ] = ( -a21 * a00 + a01 * a20 ) * det;
+        out[ 8 ] = ( a11 * a00 - a01 * a10 ) * det;
+        
+        return out;
     }
 }
 
@@ -39,13 +112,6 @@ namespace qu
     {
         if (!cond) throw new Error(msg);
     }
-
-    export function swap<T>(a: T, b: T): void
-    {
-        let t = a;
-        a = b;
-        b = t; 
-    }
 }
 
 // core
@@ -53,37 +119,50 @@ namespace qc
 {
     export function unimplemented() { throw new Error("unimplemented"); }
 
-    export const enum component_id
-    {
-        invalid = -1,
-        rect_primitive,
-        tickable,
-    }
-
     export abstract class component_base
     {
         public owner: any;
-        public abstract id(): number;
     }
 
     export abstract class prmitive_component extends component_base
     {
-        public pos: qm.vec = qm.v();
-        public scale: qm.vec = qm.v();
+        public pos: qm.vec = qm.v(0, 0);
+        public scale: qm.vec = qm.v(1, 1);
         public rot: number = 0;
         public parent: prmitive_component;
-        public bounds: qm.vec = qm.v();
-        public abstract render_c2d(ctx: CanvasRenderingContext2D): void;
+        public bounds: qm.vec = qm.v(0, 0);
+
+        public render_c2d(ctx: CanvasRenderingContext2D): void
+        {
+            ctx.save();
+            ctx.translate(this.pos.x, this.pos.y);
+            ctx.scale(this.scale.x, this.scale.y);
+            this.render_c2d_impl(ctx);
+            ctx.restore();
+        }
+
+        public get_local_transform(): qm.mat
+        {
+            return qm.mat(this.scale.x, 0, 0, this.scale.y, this.pos.x, this.pos.y);
+        }
+
+        public get_world_transform(): qm.mat
+        {
+            let base = this.parent ? this.parent.get_world_transform() : qm.mat();
+            qm.mat_mul(base, this.get_local_transform(), base);
+            return base;
+        }
+
+        public abstract render_c2d_impl(ctx: CanvasRenderingContext2D): void;
     }
 
     export class rect_primitve extends prmitive_component
     {
         public fill_color: any;
-        public id(): number { return component_id.rect_primitive; }
-        public render_c2d(ctx: CanvasRenderingContext2D): void
+        public render_c2d_impl(ctx: CanvasRenderingContext2D): void
         {
             ctx.fillStyle = this.fill_color;
-            ctx.fillRect(this.pos.x, this.pos.y, this.bounds.x, this.bounds.y);
+            ctx.fillRect(0, 0, this.bounds.x, this.bounds.y);
         }
     }
 
@@ -496,17 +575,19 @@ namespace qg
         public tiles: ql.tile_world;
         public query_start: qc.actor;
 
-        public id() { return 0; }
-        public render_c2d(ctx: CanvasRenderingContext2D): void
+        public render_c2d_impl(ctx: CanvasRenderingContext2D): void
         {
             const tl = this.tiles.tile_size;
             ctx.strokeStyle = 'white';
             ctx.fillStyle = 'red';
 
-            const pos = this.query_start.root.pos;
-            const end = qs.input.mouse.pos;
+            let to_local = this.get_world_transform();
+            qm.mat_invert(to_local);
 
-            for (let x = 0; x < this.tiles.width; ++x) 
+            const pos = qm.transform(this.query_start.root.pos, to_local)
+            const end = qm.transform(qs.input.mouse.pos, to_local);
+
+            for (let x = 0; x < this.tiles.width; ++x)
             {
                 for (let y = 0; y < this.tiles.height; ++y) 
                 {
@@ -530,9 +611,10 @@ namespace qg
             ctx.stroke();
 
             let considered: qm.vec[] = [];
-            let trace_result = this.tiles.line_trace2(this.query_start.root.pos, qs.input.mouse.pos, considered);
+            let trace_result = this.tiles.line_trace2(pos, end, considered);
 
             ctx.strokeStyle = 'green';
+            ctx.lineWidth = 0.5;
             for (let r of considered) ctx.strokeRect(r.x, r.y, tl, tl);
 
             if (trace_result)
@@ -582,7 +664,7 @@ namespace qg
 
         qc.attach_rect(p1, {x: 100, y: 170, root: true});
         qc.attach_cmp(p1, new mov());
-        qc.attach_prim(p1, tdebug, {});
+        qc.attach_prim(p1, tdebug, {x: 20, y: 20});
 
         qs.input.init(canvas);
         window.requestAnimationFrame(tick);
