@@ -9,23 +9,123 @@ namespace qm
         ) { }
     }
     
-    export const up = new vec(0, 1);
-    export const down = new vec(0, -1);
-    export const left = new vec(1, 0);
-    export const right = new vec(-1, 0);
+    export const up = new vec(0, -1);
+    export const down = new vec(0, 1);
+    export const left = new vec(-1, 0);
+    export const right = new vec(1, 0);
 
     export function v(x: number = 0, y: number = 0) { return new vec(x, y); }
     export function add(a: vec, b: vec) { return v(a.x + b.x, a.y + b.y); }
     export function sub(a: vec, b: vec) { return v(a.x - b.x, a.y - b.y); }
+    export function mul(a: vec, b: vec) { return v(a.x * b.x, a.y * b.y); }
     export function scale(a: vec, s: number) { return v(a.x * s, a.y * s); }
     export function cross(a: vec, b: vec) { return a.x * b.y - a.y * b.x; }
-    export function sqr_dist(a: vec) { return a.x * a.x + a.y * a.y; }
+    export function mag_sqr(a: vec) { return a.x * a.x + a.y * a.y; }
+
+    export type aabb = [vec, vec];
 
     // a, b - any two points
-    // @return top-left corner, bottom-right corner
-    export function aabb(a: vec, b: vec): [vec, vec]
+    // return [center, half_size]
+    export function make_aabb(a: vec, b: vec): aabb
     {
-        return [v(Math.min(a.x, b.x), Math.min(a.y, b.y)), v(Math.max(a.x, b.x), Math.max(a.y, b.y))];
+        let tl = v(Math.min(a.x, b.x), Math.min(a.y, b.y));
+        let br = v(Math.max(a.x, b.x), Math.max(a.y, b.y));
+
+        return [qm.scale(qm.add(tl, br), 0.5), qm.scale(qm.sub(br, tl), 0.5)];
+    }
+
+    // position, normal
+    export type hit_result = [qm.vec, qm.vec];
+
+    export function line_trace_aabb(start: qm.vec, end: qm.vec, aabb: qm.aabb): hit_result
+    {
+        let get_vertex = (i: number) => {
+            let [center, ext] = aabb;
+            const hx = [-ext.x, ext.x, ext.x, -ext.x];
+            const hy = [-ext.y, -ext.y, ext.y, ext.y];
+            return qm.v(center.x + hx[i % 4], center.y + hy[i % 4]);
+        };
+
+        const trace = qm.sub(end, start);
+        let hits: qm.vec[] = new Array(4);
+
+        for (let i = 0; i < 4; ++i)
+        {
+            let v1 = get_vertex(i), 
+                v2 = get_vertex(i + 1);
+            let edge = qm.sub(v2, v1);
+
+            // if trace start point is above edge
+            if (qm.cross(edge, qm.sub(start, v1)) <= 0 && 
+            // and end trace is below line
+                qm.cross(edge, qm.sub(end, v1)) >= 0)
+            {
+                // trace is vertical line
+                if (trace.x == 0)
+                {
+                    // we can only colide against horizontal line
+                    if (i == 0 || i == 2)
+                    {
+                        if (start.x >= Math.min(v1.x, v2.x) && start.x <= Math.max(v1.x, v2.x))
+                        {
+                            hits[i] = qm.v(start.x, v1.y);
+                        }
+                    }
+                    continue;
+                }
+
+                const a = trace.y / trace.x;
+                const b = start.y - a * start.x;
+
+                // horizontal line
+                if (i == 0 || i == 2)
+                {
+                    // we can't hit horizontal line with horizontal trace
+                    if (a == 0) continue;
+
+                    let y = v1.y;
+                    let x = (y - b) / a;
+                    
+                    if (x >= Math.min(v1.x, v2.x) && x <= Math.max(v1.x, v2.x))
+                    {
+                        hits[i] = qm.v(x, y);
+                    }
+                }
+                // vertical line
+                else 
+                {
+                    let x = v1.x;
+                    let y = a * x + b;
+
+                    if (y >= Math.min(v1.y, v2.y) && y <= Math.max(v1.y, v2.y))
+                    {
+                        hits[i] = qm.v(x, y);
+                    }
+                }
+            }
+        }
+
+        let best_dist = Number.MAX_VALUE;
+        let best_index = -1;
+
+        for (let i = 0; i < 4; ++i)
+        {
+            if (hits[i])
+            {
+                let dist = qm.mag_sqr(qm.sub(hits[i], start));
+                if (dist < best_dist)
+                {
+                    best_dist = dist;
+                    best_index = i;
+                }
+            }
+        }
+
+        if (best_index != -1)
+        {
+            const normal = [qm.up, qm.right, qm.down, qm.left];
+            return [hits[best_index], normal[best_index]];
+        }
     }
 
     export type mat = Float32Array;
@@ -162,7 +262,7 @@ namespace qc
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void
         {
             ctx.fillStyle = this.fill_color;
-            ctx.fillRect(0, 0, this.bounds.x, this.bounds.y);
+            ctx.fillRect(-this.bounds.x/2, -this.bounds.y/2, this.bounds.x, this.bounds.y);
         }
     }
 
@@ -202,6 +302,7 @@ namespace qc
     export class world
     {
         public actors: actor[] = [];
+        public geometry: any;
 
         public tick(delta: number)
         {
@@ -323,9 +424,14 @@ namespace qs
 // collision
 namespace ql
 {
-    export class tile_world
+    export class tile_geometry
     {
         public tile_map: boolean[][] = [];
+
+        // debug
+        public d_considered: qm.vec[] = [];
+        public d_hits: [qm.vec, qm.vec][] = [];
+
         constructor(
             public readonly width,
             public readonly height,
@@ -362,7 +468,7 @@ namespace ql
             return false;
         }
 
-        public line_trace2(start_loc: qm.vec, end_loc: qm.vec, considered?: qm.vec[]): [qm.vec, qm.vec]
+        public foreach_tile_along_path(start_loc: qm.vec, end_loc: qm.vec, fn: (x: number, y: number) => boolean): void
         {
             let s = this.project_on_grid(start_loc);
             let e = this.project_on_grid(end_loc);
@@ -375,17 +481,8 @@ namespace ql
             {
                 for (let y = s.y, x = s.x; ;)
                 {
-                    if (considered)
-                        considered.push(qm.scale(qm.v(x, y), this.tile_size));
+                    if (fn(x, y)) return;
 
-                    if (this.is_blocking(x, y)) 
-                    {
-                        let hit_result = this.line_trace_tile(start_loc, end_loc, x, y);
-                        if (hit_result) 
-                        {
-                            return hit_result;
-                        }
-                    }
                     if (y == e.y && x == e.x) break;
                     if (d.y == 0) x += Math.sign(d.x);
                     if (d.x == 0) y += Math.sign(d.y);
@@ -420,17 +517,7 @@ namespace ql
 
                 for (;;)
                 {
-                    if (considered)
-                        considered.push(qm.scale(qm.v(x, y), this.tile_size));
-
-                    if (this.is_blocking(x, y)) 
-                    {
-                        let hit_result = this.line_trace_tile(start_loc, end_loc, x, y);
-                        if (hit_result) 
-                        {
-                            return hit_result;
-                        }
-                    }
+                    if (fn(x, y)) return;
 
                     if (++i > 100) break;
                     if (x == x_end) break;
@@ -442,94 +529,88 @@ namespace ql
                 if (y != e.y) y += Math.sign(d.y);
                 else break;
             }
+        }
+        public line_trace2(start_loc: qm.vec, end_loc: qm.vec): [qm.vec, qm.vec]
+        {
+            let hit_result: [qm.vec, qm.vec];
 
+            this.foreach_tile_along_path(start_loc, end_loc, (x, y) => 
+            {
+                if (this.d_considered)
+                    this.d_considered.push(qm.scale(qm.v(x, y), this.tile_size));
+
+                if (this.is_blocking(x, y)) {
+                    hit_result = this.line_trace_tile(start_loc, end_loc, x, y);
+                    if (hit_result) {
+                        this.d_hits.push(hit_result);
+                        return true;
+                    }
+                }
+            });
+
+            return hit_result;
         }
 
-        public line_trace_tile(start: qm.vec, end: qm.vec, x: number, y: number): [qm.vec, qm.vec]
+        public line_trace_tile(start: qm.vec, end: qm.vec, x: number, y: number): qm.hit_result
         {
-            let get_vertex = (i: number) => {
-                const hx = [0, 1, 1, 0];
-                const hy = [0, 0, 1, 1];
-                return qm.scale(qm.v(x + hx[i % 4], y + hy[i % 4]), this.tile_size);
-            };
+            const ts = this.tile_size;
+            return qm.line_trace_aabb(start, end, [qm.scale(qm.v(x + 0.5, y + 0.5), ts), qm.v(ts / 2, ts / 2)]);
+        }
 
-            const trace = qm.sub(end, start);
-            let hits: qm.vec[] = new Array(4);
+        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.hit_result
+        {
+            let grid_size = qm.v(
+                Math.max(0, Math.ceil(size.x / this.tile_size) + 1), 
+                Math.max(0, Math.ceil(size.y / this.tile_size) + 1));
 
-            for (let i = 0; i < 4; ++i)
-            {
-                let v1 = get_vertex(i), 
-                    v2 = get_vertex(i + 1);
-                let edge = qm.sub(v2, v1);
+            let ext = qm.v(Math.floor(grid_size.x / 2), Math.floor(grid_size.y / 2));
+            const ts = this.tile_size;
+            const half_ts = qm.scale(qm.v(ts, ts), 0.5);
+            const half_size = qm.scale(size, 0.5);
 
-                // if trace start point is above edge
-                if (qm.cross(edge, qm.sub(start, v1)) < 0 && 
-                // and end trace is below line
-                    qm.cross(edge, qm.sub(end, v1)) > 0)
+            let hit_result: qm.hit_result;
+
+            this.foreach_tile_along_path(start, end, (x, y) => {
+
+                let hits: qm.hit_result[] = [];
+
+                for (let iy = y - ext.y; iy <= y + ext.y; ++iy)
                 {
-                    // trace is vertical line
-                    if (trace.x == 0)
+                    for (let ix = x - ext.x; ix <= x + ext.x; ++ix)
                     {
-                        // we can only colide against horizontal line
-                        if (i == 0 || i == 2)
+                        if (this.d_considered)
+                            this.d_considered.push(qm.scale(qm.v(ix, iy), ts));
+
+                        if (this.is_blocking(ix, iy))
                         {
-                            if (start.x > v1.x && start.x < v2.x)
+                            let tile_center = qm.scale(qm.v(ix + 0.5, iy + 0.5), ts);
+                            let hit = qm.line_trace_aabb(start, end, [tile_center, qm.add(half_size, half_ts)]);
+                            if (hit)
                             {
-                                hits[i] = qm.v(start.x, v1.y);
+                                this.d_hits.push(hit);
+                                hits.push(hit);
                             }
-                        }
-                        continue;
-                    }
-
-                    const a = trace.y / trace.x;
-                    const b = start.y - a * start.x;
-
-                    // horizontal line
-                    if ((i == 0 || i == 2) && a != 0)
-                    {
-                        let y = v1.y;
-                        let x = (y - b) / a;
-                        
-                        if (x >= Math.min(v1.x, v2.x) && x <= Math.max(v1.x, v2.x))
-                        {
-                            hits[i] = qm.v(x, y);
-                        }
-                    }
-                    // vertical line
-                    else
-                    {
-                        let x = v1.x;
-                        let y = a * x + b;
-
-                        if (y >= Math.min(v1.y, v2.y) && y <= Math.max(v1.y, v2.y))
-                        {
-                            hits[i] = qm.v(x, y);
                         }
                     }
                 }
-            }
 
-            let best_dist = Number.MAX_VALUE;
-            let best_index = -1;
-
-            for (let i = 0; i < 4; ++i)
-            {
-                if (hits[i])
+                let best_dist = Number.MAX_VALUE;
+                for (let hit of hits)
                 {
-                    let dist = qm.sqr_dist(qm.sub(hits[i], start));
+                    let [p, _] = hit;
+                    let dist = qm.mag_sqr(qm.sub(p, start));
                     if (dist < best_dist)
                     {
                         best_dist = dist;
-                        best_index = i;
+                        hit_result = hit;
                     }
                 }
-            }
 
-            if (best_index != -1)
-            {
-                const normal = [qm.up, qm.right, qm.down, qm.left];
-                return [hits[best_index], normal[best_index]];
-            }
+                if (hit_result) return true;
+                else return false;
+            });
+
+            return hit_result;
         }
 
         private project_on_grid(point: qm.vec): qm.vec
@@ -543,36 +624,71 @@ namespace qg
 {
     class mov extends qc.component_base
     {
-        public id(): number { return 0; }
         public tick(delta: number)
         {
             let a = this.owner as qc.actor;
             let r = a.root;
-            // r.pos.x += 1;
-            // r.pos.x %= 100;
+
+            let w = a.world as qc.world;
+            let g = w.geometry as ql.tile_geometry;
+            let h = r.bounds.y;
+
+            // r.pos.y += 1;
+
+
+            let end = qm.add(r.pos, qm.v(0, h * 1.1));
+            // let trace = g.line_trace2(r.pos, qm.add(r.pos, qm.v(0, h * 1.1)));
+            //let trace = g.sweep_aabb(r.pos, end, r.bounds);
+            // if (trace)
+            // {
+            //     let [p, n] = trace;
+            //     r.pos.x = p.x;
+            //     r.pos.y = p.y - h;
+            // }
+
+            let move = (x, y) => {
+                let hb = qm.scale(r.bounds, 0.5);
+                let trace = g.sweep_aabb(r.pos, qm.add(r.pos, qm.v(x, y)), r.bounds);
+                if (trace)
+                {
+                    let [p, n] = trace;
+                    r.pos.x = p.x + n.x;
+                    r.pos.y = p.y + n.y;
+                    return true;
+                }
+                else
+                {
+                    r.pos.x += x;
+                    r.pos.y += y;
+                }
+                return false;
+            }
+
+            move(0, 1)
+            let speed = 3;
 
             if (qs.input.keyboard.is_down('ArrowLeft'))
             {
-                r.pos.x -= 1;
+                move(-speed, 0);
             }
             else if (qs.input.keyboard.is_down('ArrowRight'))
             {
-                r.pos.x += 1;
+                move(speed, 0);
             }
             else if (qs.input.keyboard.is_down('ArrowDown'))
             {
-                r.pos.y += 1;
+                move(0, speed);
             }
             else if (qs.input.keyboard.is_down('ArrowUp'))
             {
-                r.pos.y -= 1;
+                move(0, -speed);
             }
         }
     }
 
     class debug_draw_tile extends qc.prmitive_component
     {
-        public tiles: ql.tile_world;
+        public tiles: ql.tile_geometry;
         public query_start: qc.actor;
 
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void
@@ -594,35 +710,30 @@ namespace qg
                     if (this.tiles.is_blocking(x, y))
                     {
                         ctx.strokeRect(x * tl, y * tl, tl, tl);
-
-                        let r = this.tiles.line_trace_tile(pos, end, x, y);
-                        if (r)
-                        {
-                            let [p, n] = r;
-                            ctx.fillRect(p.x, p.y, 4, 4);
-                        }
+                        // this.tiles.line_trace_tile(pos, end, x, y);
                     }
                 }
             }
 
-            ctx.beginPath();
-            ctx.moveTo(pos.x, pos.y);
-            ctx.lineTo(end.x, end.y);
-            ctx.stroke();
+            // ctx.beginPath();
+            // ctx.moveTo(pos.x, pos.y);
+            // ctx.lineTo(end.x, end.y);
+            // ctx.stroke();
 
-            let considered: qm.vec[] = [];
-            let trace_result = this.tiles.line_trace2(pos, end, considered);
+            let considered = this.tiles.d_considered;
+            //let trace_result = this.tiles.line_trace2(pos, end);
+            //this.tiles.sweep_aabb(pos, end, this.query_start.root.bounds);
 
             ctx.strokeStyle = 'green';
             ctx.lineWidth = 0.5;
             for (let r of considered) ctx.strokeRect(r.x, r.y, tl, tl);
 
-            if (trace_result)
-            {
-                ctx.fillStyle = 'green';
-                let [p, n] = trace_result;
-                ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
-            }
+            let hits = this.tiles.d_hits;
+
+            for (let [p, n] of hits) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+
+            this.tiles.d_considered = [];
+            this.tiles.d_hits = [];
         }
     }
 
@@ -642,29 +753,36 @@ namespace qg
         let canvas: HTMLCanvasElement = document.querySelector("#canvas");
         ctx = canvas.getContext("2d");
         ctx.translate(0.5, 0.5);
-        let t = new ql.tile_world(20, 20, 14);
+        let t = new ql.tile_geometry(20, 20, 14);
 
         for (let i = 0; i < 20; ++i)
             t.set_blocking(i, 19, true);
         for (let i = 0; i < 20; ++i)
             t.set_blocking(i, 0, true);
+
         for (let i = 7; i < 17; ++i)
             t.set_blocking(i, 10, true);
+
+        t.set_blocking(16, 9, true);
+        for (let i = 10; i < 17; ++i)
+            t.set_blocking(i, 8, true);
+            
         for (let i = 0; i < 20; ++i)
             t.set_blocking(0, i, true);
         for (let i = 0; i < 20; ++i)
             t.set_blocking(19, i, true);
 
         world = new qc.world();
+        world.geometry = t;
         let p1 = world.spawn_actor();
 
         let tdebug = new debug_draw_tile();
         tdebug.tiles = t;
         tdebug.query_start = p1;
 
-        qc.attach_rect(p1, {x: 100, y: 170, root: true});
+        qc.attach_rect(p1, {x: 100, y: 190, width: 12, height: 12, fill: 'rgba(255, 0, 0, .5)', root: true});
         qc.attach_cmp(p1, new mov());
-        qc.attach_prim(p1, tdebug, {x: 20, y: 20});
+        qc.attach_prim(p1, tdebug, {x: 0, y: 0});
 
         qs.input.init(canvas);
         window.requestAnimationFrame(tick);
