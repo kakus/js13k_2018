@@ -20,7 +20,21 @@ namespace qm
     export function mul(a: vec, b: vec) { return v(a.x * b.x, a.y * b.y); }
     export function scale(a: vec, s: number) { return v(a.x * s, a.y * s); }
     export function cross(a: vec, b: vec) { return a.x * b.y - a.y * b.x; }
+    export function v_max(a: vec, b: vec) { return v(Math.max(a.x, b.x), Math.max(a.y, b.y)); }
+    export function v_min(a: vec, b: vec) { return v(Math.min(a.x, b.x), Math.min(a.y, b.y)); }
     export function mag_sqr(a: vec) { return a.x * a.x + a.y * a.y; }
+    export function mag(a: vec) { return Math.sqrt(mag_sqr(a)); }
+    export function unit(a: vec) { let m = mag(a); return scale(a, 1/m); }
+    export function clamp_mag(a: vec, min: number, max: number)
+    {
+        let m = mag(a);
+        return m < min ? scale(unit(a), min) :
+               m > max ? scale(unit(a), max) :
+                         a;
+    }
+
+    // general math
+    export function clamp(x: number, min: number, max: number) { return Math.max(Math.min(x, max), min); }
 
     export type aabb = [vec, vec];
 
@@ -222,6 +236,7 @@ namespace qc
     export abstract class component_base
     {
         public owner: any;
+        public init(): void { }
     }
 
     export abstract class prmitive_component extends component_base
@@ -273,23 +288,23 @@ namespace qc
         public root: prmitive_component;
     }
 
-    export function attach_cmp<T extends component_base>(owner: actor, cmp?: T): T
+    export function attach_cmp<T extends component_base>(owner: actor, cmp: T): T
     {
         cmp.owner = owner;
         owner.components.push(cmp);
+        cmp.init();
         return cmp;
     }
 
     export function attach_prim(owner: actor, prim: prmitive_component, {x = 0, y = 0, width = 10, height = 10, root = false})
     {
-        attach_cmp(owner, prim);
         prim.pos.x = x;
         prim.pos.y = y;
         prim.bounds.x = width;
         prim.bounds.y = height;
 
         if (root) owner.root = prim;
-        return prim;
+        return attach_cmp(owner, prim);
     }
 
     export function attach_rect(owner: actor, {x = 0, y = 0, width = 10, height = 10, fill = 'red', root = false})
@@ -312,7 +327,7 @@ namespace qc
                 {
                     if (qu.has_method(cmp, 'tick'))
                     {
-                        cmp.tick();
+                        cmp.tick(delta);
                     }
                 }
             }
@@ -382,6 +397,15 @@ namespace qs
 
             const state: { [key:string]: key_state } =  { };
             export function is_down(key: key) { return state[key] ? state[key].is_down : false; }
+            export function just_pressed(key: key, dt_ms = 40)
+            {
+                let ks = state[key];
+                if (ks && ks.is_down)
+                {
+                    return Date.now() - ks.timestamp < dt_ms;
+                }
+                return false;
+            }
 
             export function on_keydown(e: KeyboardEvent)
             {
@@ -389,14 +413,12 @@ namespace qs
                 if (state[e.key].is_down) return;
                 state[e.key].is_down = true;
                 state[e.key].timestamp = Date.now();
-                console.log(state);
             }
 
             export function on_keyup(e: KeyboardEvent)
             {
                 if (!state[e.key]) state[e.key] = new key_state();
                 state[e.key].is_down = false;
-                console.log(state);
             }
         }
 
@@ -622,8 +644,102 @@ namespace ql
 
 namespace qg
 {
-    class mov extends qc.component_base
+    class movement_component extends qc.component_base
     {
+        // setup
+        // any axis
+        public max_velocity = 300;
+        // x axis
+        public max_velocity_on_ground = 200;
+        public gravity = 1000;
+
+        // runtime data
+        public vel = qm.v();
+        public acc = qm.v();
+        public last_hit: qm.hit_result;
+        public on_ground = false;
+
+        public init()
+        {
+
+        }
+
+        public process_input() {
+            const speed = 900;
+
+            this.acc.x = 0;
+            this.acc.y = 0;
+            const move_left = qs.input.keyboard.is_down('ArrowLeft');
+            const move_right = qs.input.keyboard.is_down('ArrowRight');
+
+            if (move_left) {
+                this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
+            }
+            else if (move_right) {
+                this.acc.x = speed * (this.on_ground ? 1 : 0.5);
+            }
+            else if (this.on_ground)
+            {
+                this.vel.x *= 0.6;
+            }
+
+            if (qs.input.keyboard.is_down('ArrowUp')) {
+                if (this.on_ground) {
+                    this.acc.y = -speed * 100;
+                }
+                else if (move_left || move_right) {
+                    let wall_trace = this.trace_wall(5);
+                    if (wall_trace) {
+                        let [p, n] = wall_trace;
+                        let r = (<qc.actor>this.owner).root;
+                        let dist = qm.mag(qm.sub(p, r.pos)) - r.bounds.x / 2;
+
+                        let do_jump = false;
+                        let jump_off_wall = false;
+
+                        if (move_left) {
+                            jump_off_wall = n.x < 0;
+                            do_jump = dist <= (n.x > 0 ? 1 : 5);
+                        }
+                        if (move_right) {
+                            jump_off_wall = n.x > 0;
+                            do_jump = dist <= (n.x < 0 ? 1 : 5);
+                        }
+
+                        if (do_jump) {
+                            this.acc.x = speed * n.x * (jump_off_wall ? 10 : 50);
+                            this.acc.y = -speed * (jump_off_wall ? 60 : 200);
+                        }
+                    }
+                }
+            }
+        }
+
+        public trace_wall(dist = 2): qm.hit_result
+        {
+            let a = this.owner as qc.actor;
+            let r = a.root;
+            let w = a.world as qc.world;
+            let g = w.geometry as ql.tile_geometry;
+
+            let left = qm.scale(qm.left, r.bounds.x * 0.5  + dist);
+            let right = qm.scale(qm.right, r.bounds.x * 0.5 + dist);
+
+            let trace = g.line_trace2(r.pos, qm.add(r.pos, left));
+            return trace ? trace : g.line_trace2(r.pos, qm.add(r.pos, right));
+        }
+
+        public trace_ground(): qm.hit_result
+        {
+            let a = this.owner as qc.actor;
+            let r = a.root;
+            let w = a.world as qc.world;
+            let g = w.geometry as ql.tile_geometry;
+
+            let down = qm.scale(qm.down, r.bounds.y + 1)
+            return g.line_trace2(r.pos, qm.add(r.pos, down));
+        }
+        
         public tick(delta: number)
         {
             let a = this.owner as qc.actor;
@@ -633,56 +749,35 @@ namespace qg
             let g = w.geometry as ql.tile_geometry;
             let h = r.bounds.y;
 
-            // r.pos.y += 1;
+            this.process_input();
+            
+            this.vel.y += this.gravity * delta;
+            this.vel = qm.add(this.vel, qm.scale(this.acc, delta));
 
+            this.vel = qm.clamp_mag(this.vel, 0, this.max_velocity);
+            this.vel.x = qm.clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
 
-            let end = qm.add(r.pos, qm.v(0, h * 1.1));
-            // let trace = g.line_trace2(r.pos, qm.add(r.pos, qm.v(0, h * 1.1)));
-            //let trace = g.sweep_aabb(r.pos, end, r.bounds);
-            // if (trace)
-            // {
-            //     let [p, n] = trace;
-            //     r.pos.x = p.x;
-            //     r.pos.y = p.y - h;
-            // }
+            let end = qm.add(r.pos, qm.scale(this.vel, delta));
+            let trace = g.sweep_aabb(r.pos, end, r.bounds);
 
-            let move = (x, y) => {
-                let hb = qm.scale(r.bounds, 0.5);
-                let trace = g.sweep_aabb(r.pos, qm.add(r.pos, qm.v(x, y)), r.bounds);
-                if (trace)
-                {
-                    let [p, n] = trace;
-                    r.pos.x = p.x + n.x;
-                    r.pos.y = p.y + n.y;
-                    return true;
+            if (trace) {
+                let [p, n] = trace;
+                this.last_hit = trace;
+                r.pos.x = p.x + n.x;
+                r.pos.y = p.y + n.y;
+
+                if (n.y != 0) {
+                    this.vel.y = 0;
                 }
-                else
-                {
-                    r.pos.x += x;
-                    r.pos.y += y;
+                if (n.x != 0) {
+                    this.vel.x = 0;
                 }
-                return false;
+            }
+            else {
+                r.pos = end;
             }
 
-            move(0, 1)
-            let speed = 3;
-
-            if (qs.input.keyboard.is_down('ArrowLeft'))
-            {
-                move(-speed, 0);
-            }
-            else if (qs.input.keyboard.is_down('ArrowRight'))
-            {
-                move(speed, 0);
-            }
-            else if (qs.input.keyboard.is_down('ArrowDown'))
-            {
-                move(0, speed);
-            }
-            else if (qs.input.keyboard.is_down('ArrowUp'))
-            {
-                move(0, -speed);
-            }
+            this.on_ground = !!this.trace_ground();
         }
     }
 
@@ -726,11 +821,11 @@ namespace qg
 
             ctx.strokeStyle = 'green';
             ctx.lineWidth = 0.5;
-            for (let r of considered) ctx.strokeRect(r.x, r.y, tl, tl);
+            // for (let r of considered) ctx.strokeRect(r.x, r.y, tl, tl);
 
             let hits = this.tiles.d_hits;
 
-            for (let [p, n] of hits) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+            // for (let [p, n] of hits) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
 
             this.tiles.d_considered = [];
             this.tiles.d_hits = [];
@@ -742,7 +837,7 @@ namespace qg
 
     function tick()
     {
-        world.tick(30);
+        world.tick(1/60);
         ctx.clearRect(0, 0, 320, 320);
         qr.render_w(ctx, world);
         window.requestAnimationFrame(tick);
@@ -752,7 +847,7 @@ namespace qg
     {
         let canvas: HTMLCanvasElement = document.querySelector("#canvas");
         ctx = canvas.getContext("2d");
-        ctx.translate(0.5, 0.5);
+        ctx.translate(10.5, 10.5);
         let t = new ql.tile_geometry(20, 20, 14);
 
         for (let i = 0; i < 20; ++i)
@@ -761,8 +856,9 @@ namespace qg
             t.set_blocking(i, 0, true);
 
         for (let i = 7; i < 17; ++i)
-            t.set_blocking(i, 10, true);
+            t.set_blocking(i, 11, true);
 
+        t.set_blocking(16, 10, true);
         t.set_blocking(16, 9, true);
         for (let i = 10; i < 17; ++i)
             t.set_blocking(i, 8, true);
@@ -781,7 +877,7 @@ namespace qg
         tdebug.query_start = p1;
 
         qc.attach_rect(p1, {x: 100, y: 190, width: 12, height: 12, fill: 'rgba(255, 0, 0, .5)', root: true});
-        qc.attach_cmp(p1, new mov());
+        qc.attach_cmp(p1, new movement_component());
         qc.attach_prim(p1, tdebug, {x: 0, y: 0});
 
         qs.input.init(canvas);
