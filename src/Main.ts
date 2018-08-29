@@ -235,7 +235,7 @@ namespace qc
 
     export abstract class component_base
     {
-        public owner: any;
+        public owner: actor;
         public init(): void { }
     }
 
@@ -252,6 +252,9 @@ namespace qc
             ctx.save();
             ctx.translate(this.pos.x, this.pos.y);
             ctx.scale(this.scale.x, this.scale.y);
+            if (this.rot != 0) {
+                ctx.rotate(this.rot);
+            }
             this.render_c2d_impl(ctx);
             ctx.restore();
         }
@@ -283,9 +286,13 @@ namespace qc
 
     export class actor
     {
-        public world: any;
+        public world: world;
         public components: component_base[] = [];
         public root: prmitive_component;
+
+        public destory() { 
+            this.world.destroy_actor(this); 
+        }
     }
 
     export function attach_cmp<T extends component_base>(owner: actor, cmp: T): T
@@ -296,7 +303,7 @@ namespace qc
         return cmp;
     }
 
-    export function attach_prim(owner: actor, prim: prmitive_component, {x = 0, y = 0, width = 10, height = 10, root = false})
+    export function attach_prim<T extends prmitive_component>(owner: actor, prim: T, {x = 0, y = 0, width = 10, height = 10, root = false}): T
     {
         prim.pos.x = x;
         prim.pos.y = y;
@@ -340,6 +347,15 @@ namespace qc
             this.actors.push(a);
             return a;
         }
+
+        public destroy_actor(actor: qc.actor): void
+        {
+            let i = this.actors.indexOf(actor);
+            this.actors.splice(i, 1);
+            actor.world = undefined;
+        }
+
+        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.hit_result { return undefined; }
     }
 }
 
@@ -393,32 +409,34 @@ namespace qs
             type key = 'ArrowLeft' |
                        'ArrowRight' |
                        'ArrowUp' |
-                       'ArrowDown';
+                       'ArrowDown' |
+                       'z' | 'x';
 
             const state: { [key:string]: key_state } =  { };
             export function is_down(key: key) { return state[key] ? state[key].is_down : false; }
-            export function just_pressed(key: key, dt_ms = 40)
-            {
+            export function get_state(key: key | string) { 
+                let s = state[key];
+                if (!s) state[key] = s = new key_state();
+                return s;
+            }
+
+            export function just_pressed(key: key, dt_ms = 20) {
                 let ks = state[key];
-                if (ks && ks.is_down)
-                {
+                if (ks && ks.is_down) {
                     return Date.now() - ks.timestamp < dt_ms;
                 }
                 return false;
             }
 
-            export function on_keydown(e: KeyboardEvent)
-            {
-                if (!state[e.key]) state[e.key] = new key_state();
-                if (state[e.key].is_down) return;
-                state[e.key].is_down = true;
-                state[e.key].timestamp = Date.now();
+            export function on_keydown(e: KeyboardEvent) {
+                let s = get_state(e.key);
+                if (s.is_down) return;
+                s.is_down = true;
+                s.timestamp = Date.now();
             }
 
-            export function on_keyup(e: KeyboardEvent)
-            {
-                if (!state[e.key]) state[e.key] = new key_state();
-                state[e.key].is_down = false;
+            export function on_keyup(e: KeyboardEvent) {
+                get_state(e.key).is_down = false;
             }
         }
 
@@ -644,7 +662,17 @@ namespace ql
 
 namespace qg
 {
-    class movement_component extends qc.component_base
+    class game_world extends qc.world
+    {
+        public geometry: ql.tile_geometry;
+
+        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.hit_result
+        {
+            return this.geometry.sweep_aabb(start, end, size);
+        }
+    }
+
+    class player_movement extends qc.component_base
     {
         // setup
         // any axis
@@ -658,6 +686,7 @@ namespace qg
         public acc = qm.v();
         public last_hit: qm.hit_result;
         public on_ground = false;
+        public moving_left = false;
 
         public init()
         {
@@ -674,9 +703,11 @@ namespace qg
 
             if (move_left) {
                 this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
+                this.moving_left = true;
             }
             else if (move_right) {
                 this.acc.x = speed * (this.on_ground ? 1 : 0.5);
+                this.moving_left = false;
             }
             else if (this.on_ground)
             {
@@ -717,9 +748,9 @@ namespace qg
 
         public trace_wall(dist = 2): qm.hit_result
         {
-            let a = this.owner as qc.actor;
+            let a = this.owner;
             let r = a.root;
-            let w = a.world as qc.world;
+            let w = a.world;
             let g = w.geometry as ql.tile_geometry;
 
             let left = qm.scale(qm.left, r.bounds.x * 0.5  + dist);
@@ -731,9 +762,9 @@ namespace qg
 
         public trace_ground(): qm.hit_result
         {
-            let a = this.owner as qc.actor;
+            let a = this.owner;
             let r = a.root;
-            let w = a.world as qc.world;
+            let w = a.world;
             let g = w.geometry as ql.tile_geometry;
 
             let down = qm.scale(qm.down, r.bounds.y + 1)
@@ -781,10 +812,46 @@ namespace qg
         }
     }
 
-    class debug_draw_tile extends qc.prmitive_component
+
+    class projectile_movement extends qc.component_base
+    {
+        public acc = qm.v(0, 1000);
+        public vel = qm.v();
+
+        public tick(delta: number): void
+        {
+            let r = this.owner.root;
+            let w = this.owner.world;
+
+            this.vel = qm.add(this.vel, qm.scale(this.acc, delta));
+            let ds = qm.scale(this.vel, delta);
+            let end = qm.add(r.pos, ds);
+
+            let hit_result = w.sweep_aabb(r.pos, end, r.bounds);
+            if (hit_result)
+            {
+                this.vel = qm.v();
+                this.acc = qm.v();
+                [r.pos] = hit_result;
+                setTimeout( _ => this.owner.destory(), 1000);
+                this.tick = undefined;
+            }
+            else
+            {
+                r.pos = end;
+                r.rot = Math.atan2(this.vel.y, this.vel.x);
+            }
+        }
+    }
+
+    class debug_draw_collisions extends qc.prmitive_component
     {
         public tiles: ql.tile_geometry;
-        public query_start: qc.actor;
+
+        public init()
+        {
+            this.tiles = this.owner.world.geometry as ql.tile_geometry;
+        }
 
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void
         {
@@ -792,11 +859,11 @@ namespace qg
             ctx.strokeStyle = 'white';
             ctx.fillStyle = 'red';
 
-            let to_local = this.get_world_transform();
-            qm.mat_invert(to_local);
+            // let to_local = this.get_world_transform();
+            // qm.mat_invert(to_local);
 
-            const pos = qm.transform(this.query_start.root.pos, to_local)
-            const end = qm.transform(qs.input.mouse.pos, to_local);
+            // const pos = qm.transform(this.query_start.root.pos, to_local)
+            // const end = qm.transform(qs.input.mouse.pos, to_local);
 
             for (let x = 0; x < this.tiles.width; ++x)
             {
@@ -807,6 +874,16 @@ namespace qg
                         ctx.strokeRect(x * tl, y * tl, tl, tl);
                         // this.tiles.line_trace_tile(pos, end, x, y);
                     }
+                }
+            }
+
+            ctx.strokeStyle = 'pink';
+            for (let act of this.owner.world.actors)
+            {
+                for (let p of act.components.filter(c => c instanceof qc.prmitive_component) as qc.prmitive_component[])
+                {
+                    let h = qm.scale(p.bounds, 0.5);
+                    ctx.strokeRect(p.pos.x - h.x, p.pos.y - h.y, h.x * 2, h.y * 2);
                 }
             }
 
@@ -823,12 +900,80 @@ namespace qg
             ctx.lineWidth = 0.5;
             // for (let r of considered) ctx.strokeRect(r.x, r.y, tl, tl);
 
-            let hits = this.tiles.d_hits;
-
+            // let hits = this.tiles.d_hits;
             // for (let [p, n] of hits) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
 
             this.tiles.d_considered = [];
             this.tiles.d_hits = [];
+        }
+    }
+
+    function spawn_projectile(world: qc.world, loc: qm.vec, dir: qm.vec): qc.actor
+    {
+        let a = world.spawn_actor();
+
+        let r = qc.attach_prim(a, new qc.rect_primitve(), {root: true});
+        r.pos = loc;
+        r.bounds = qm.v(10, 3);
+        r.fill_color = 'rgba(0, 255, 0, 0.7)';
+
+        let p = qc.attach_cmp(a, new projectile_movement());
+        p.vel = dir;
+
+        return a;
+    }
+
+    class player_controller extends qc.component_base
+    {
+        private movement: player_movement;
+        private z_press_start = -1;
+        private last_fire_time = 0;
+
+        public init()
+        {
+            this.movement = this.owner.components.find(c => c instanceof player_movement) as player_movement;
+        }
+
+        public tick(delta: number): void
+        {
+            let a = this.owner;
+            let z_state = qs.input.keyboard.get_state('z');
+            if (z_state.is_down)
+            {
+                this.z_press_start = qs.input.keyboard.get_state('z').timestamp;
+            }
+
+            if (this.z_press_start > 0)
+            {
+                const press_time = Date.now() - this.z_press_start;
+                const can_fire = this.last_fire_time - this.z_press_start != 0;
+
+                if (can_fire && (!z_state.is_down|| press_time > 1000)) {
+                    this.last_fire_time = this.z_press_start;
+                    this.z_press_start = 0;
+
+                    let ampl = qm.clamp(press_time / 100, 1, 10);
+                    spawn_projectile(a.world, a.root.pos,
+                        qm.clamp_mag(qm.add(
+                            qm.scale(this.movement.moving_left ? qm.left : qm.right, 100 * ampl),
+                            qm.v(0, -200)), 0, 800));
+                }
+            }
+        }
+    }
+
+    function parse_level(data: string, geom: ql.tile_geometry): void
+    {
+        let x = 0, y = 0;
+        for (let line of data.split('\n'))
+        {
+            x = 0;
+            for (let char of line)
+            {
+                if (char === '#') geom.set_blocking(x, y, true);
+                x += 1;
+            }
+            y += 1;
         }
     }
 
@@ -848,37 +993,42 @@ namespace qg
         let canvas: HTMLCanvasElement = document.querySelector("#canvas");
         ctx = canvas.getContext("2d");
         ctx.translate(10.5, 10.5);
-        let t = new ql.tile_geometry(20, 20, 14);
+        let t = new ql.tile_geometry(21, 21, 14);
 
-        for (let i = 0; i < 20; ++i)
-            t.set_blocking(i, 19, true);
-        for (let i = 0; i < 20; ++i)
-            t.set_blocking(i, 0, true);
+        parse_level(
+`####################
+#                  #
+#                  #
+#                  #
+#   ####      ###  #
+#      #      #    #
+#      #      #    #
+#      #      #    #
+#      #      #    #
+#      #      #    #
+#      #      #    #
+#                  #
+#                  #
+#                  #
+#       ###        #
+#                  #
+#                  #
+#                  #
+#           ####   #
+#           #      #
+####################`
+        , t)
 
-        for (let i = 7; i < 17; ++i)
-            t.set_blocking(i, 11, true);
-
-        t.set_blocking(16, 10, true);
-        t.set_blocking(16, 9, true);
-        for (let i = 10; i < 17; ++i)
-            t.set_blocking(i, 8, true);
-            
-        for (let i = 0; i < 20; ++i)
-            t.set_blocking(0, i, true);
-        for (let i = 0; i < 20; ++i)
-            t.set_blocking(19, i, true);
-
-        world = new qc.world();
+        world = new game_world();
         world.geometry = t;
-        let p1 = world.spawn_actor();
+        let player = world.spawn_actor();
 
-        let tdebug = new debug_draw_tile();
-        tdebug.tiles = t;
-        tdebug.query_start = p1;
+        let tdebug = new debug_draw_collisions();
 
-        qc.attach_rect(p1, {x: 100, y: 190, width: 12, height: 12, fill: 'rgba(255, 0, 0, .5)', root: true});
-        qc.attach_cmp(p1, new movement_component());
-        qc.attach_prim(p1, tdebug, {x: 0, y: 0});
+        qc.attach_rect(player, {x: 100, y: 190, width: 12, height: 12, fill: 'rgba(255, 0, 0, .5)', root: true});
+        qc.attach_cmp(player, new player_movement());
+        qc.attach_prim(player, tdebug, {x: 0, y: 0});
+        qc.attach_cmp(player, new player_controller());
 
         qs.input.init(canvas);
         window.requestAnimationFrame(tick);
