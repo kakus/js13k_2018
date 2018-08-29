@@ -1,27 +1,33 @@
 // math
 namespace qm
 {
-    export class vec 
-    { 
+    export class vec { 
         constructor(
-            public x:number = 0,
-            public y: number = 0
+            public x: number,
+            public y: number
         ) { }
     }
     
-    export const up = new vec(0, -1);
-    export const down = new vec(0, 1);
-    export const left = new vec(-1, 0);
-    export const right = new vec(1, 0);
+    export class cvec {
+        constructor(
+            public readonly x: number,
+            public readonly y: number
+        ) { }
+    }
+    
+    export const up = new cvec(0, -1);
+    export const down = new cvec(0, 1);
+    export const left = new cvec(-1, 0);
+    export const right = new cvec(1, 0);
 
-    export function v(x: number = 0, y: number = 0) { return new vec(x, y); }
+    export function v(x = 0, y = 0) { return new vec(x, y); }
+    export function vc(a: vec) { return new vec(a.x, a.y); }
     export function add(a: vec, b: vec) { return v(a.x + b.x, a.y + b.y); }
     export function sub(a: vec, b: vec) { return v(a.x - b.x, a.y - b.y); }
     export function mul(a: vec, b: vec) { return v(a.x * b.x, a.y * b.y); }
     export function scale(a: vec, s: number) { return v(a.x * s, a.y * s); }
     export function cross(a: vec, b: vec) { return a.x * b.y - a.y * b.x; }
-    export function v_max(a: vec, b: vec) { return v(Math.max(a.x, b.x), Math.max(a.y, b.y)); }
-    export function v_min(a: vec, b: vec) { return v(Math.min(a.x, b.x), Math.min(a.y, b.y)); }
+    export function sign(a: vec) { return v(Math.sign(a.x), Math.sign(a.y)); }
     export function mag_sqr(a: vec) { return a.x * a.x + a.y * a.y; }
     export function mag(a: vec) { return Math.sqrt(mag_sqr(a)); }
     export function unit(a: vec) { let m = mag(a); return scale(a, 1/m); }
@@ -228,8 +234,8 @@ namespace qu
     }
 }
 
-// core
-namespace qc 
+// framework
+namespace qf 
 {
     export function unimplemented() { throw new Error("unimplemented"); }
 
@@ -237,6 +243,7 @@ namespace qc
     {
         public owner: actor;
         public init(): void { }
+        public getworld() { return this.owner.world; }
     }
 
     export abstract class prmitive_component extends component_base
@@ -293,6 +300,14 @@ namespace qc
         public destory() { 
             this.world.destroy_actor(this); 
         }
+
+        public getpos(): qm.vec {
+            return qm.vc(this.root.pos);
+        }
+        
+        public getcmp<T extends component_base>(clazz: Function & { prototype: T }): T[] {
+            return this.components.filter(c => c instanceof clazz) as T[];
+        }
     }
 
     export function attach_cmp<T extends component_base>(owner: actor, cmp: T): T
@@ -325,9 +340,13 @@ namespace qc
     {
         public actors: actor[] = [];
         public geometry: any;
+        public player: actor;
+        public timer = new timer();
 
         public tick(delta: number)
         {
+            this.timer.tick(delta);
+
             for (let actor of this.actors)
             {
                 for (let cmp of actor.components)
@@ -348,41 +367,100 @@ namespace qc
             return a;
         }
 
-        public destroy_actor(actor: qc.actor): void
+        public destroy_actor(actor: qf.actor): void
         {
             let i = this.actors.indexOf(actor);
             this.actors.splice(i, 1);
             actor.world = undefined;
         }
 
-        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.hit_result { return undefined; }
+        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.hit_result { 
+            return undefined; 
+        }
+    }
+
+    export const enum timer_type
+    {
+        once,
+        repeat
+    }
+
+    class timer_event {
+        public fire_in = 0;
+
+        constructor(
+            public owner: timer,
+            public type: timer_type,
+            public delay: number,
+            public fn: Function
+        ) { 
+            this.fire_in = delay;
+        }
+
+        public reset() { 
+            this.fire_in = this.delay; 
+        }
+    }
+
+    export class timer
+    {
+        public events: timer_event[] = [];
+
+        public tick(delta: number)
+        {
+            for (let i = this.events.length - 1; i >= 0; --i)
+            {
+                let e = this.events[i];
+
+                e.fire_in -= delta;
+                if (e.fire_in <= 0) {
+                    e.fn();
+                    if (e.type == timer_type.once) this.events.splice(i, 1);
+                    if (e.type == timer_type.repeat) e.reset();
+                }
+            }
+        }
+
+        public delay(delay: number, fn: Function): timer_event
+        {
+            let e = new timer_event(this, timer_type.once, delay, fn);
+            this.events.push(e);
+            return e;
+        }
+
+        public every(timespan: number, fn: Function): timer_event
+        {
+            let e = new timer_event(this, timer_type.repeat, timespan, fn);
+            this.events.push(e);
+            return e;
+        }
     }
 }
 
 // render
 namespace qr
 {
-    export function render_w(ctx: CanvasRenderingContext2D, world: qc.world)
+    export function render_w(ctx: CanvasRenderingContext2D, world: qf.world)
     {
         render_a(ctx, world.actors);
     }
 
-    export function render_a(ctx: CanvasRenderingContext2D, actors: qc.actor[])
+    export function render_a(ctx: CanvasRenderingContext2D, actors: qf.actor[])
     {
-        let primitives: qc.prmitive_component[] = [];
+        let primitives: qf.prmitive_component[] = [];
 
         for (let actor of actors)
         {
             for (let cmp of actor.components)
             {
-                if (cmp instanceof qc.prmitive_component) primitives.push(cmp);
+                if (cmp instanceof qf.prmitive_component) primitives.push(cmp);
             }
         }
 
         render_p(ctx, primitives);
     }
 
-    export function render_p(ctx: CanvasRenderingContext2D, prmitives: qc.prmitive_component[])
+    export function render_p(ctx: CanvasRenderingContext2D, prmitives: qf.prmitive_component[])
     {
         for (let prim of prmitives) 
         {
@@ -414,7 +492,7 @@ namespace qs
 
             const state: { [key:string]: key_state } =  { };
             export function is_down(key: key) { return state[key] ? state[key].is_down : false; }
-            export function get_state(key: key | string) { 
+            export function get_state(key: key | string): key_state { 
                 let s = state[key];
                 if (!s) state[key] = s = new key_state();
                 return s;
@@ -660,9 +738,152 @@ namespace ql
     }
 }
 
+// components
+namespace qc {
+    export class character_movement extends qf.component_base {
+        // setup
+        // any axis
+        public max_velocity = 300;
+        // x axis
+        public max_velocity_on_ground = 200;
+        public gravity = 1000;
+        public bounce_off_wall = false;
+
+        // runtime data
+        public vel = qm.v();
+        public acc = qm.v();
+        public last_hit: qm.hit_result;
+        public on_ground = false;
+        public moving_left = false;
+
+        public trace_wall(dist = 2): qm.hit_result {
+            let r = this.owner.root;
+            let g = this.owner.world.geometry as ql.tile_geometry;
+
+            let left = qm.scale(qm.left, r.bounds.x * 0.5 + dist);
+            let right = qm.scale(qm.right, r.bounds.x * 0.5 + dist);
+
+            let trace = g.line_trace2(r.pos, qm.add(r.pos, left));
+            return trace ? trace : g.line_trace2(r.pos, qm.add(r.pos, right));
+        }
+
+        public trace_ground(): qm.hit_result {
+            let a = this.owner;
+            let r = a.root;
+            let w = a.world;
+            let g = w.geometry as ql.tile_geometry;
+
+            let down = qm.scale(qm.down, r.bounds.y + 1)
+            return g.line_trace2(r.pos, qm.add(r.pos, down));
+        }
+
+        public tick(delta: number) {
+            let r = this.owner.root;
+            let g = this.owner.world.geometry as ql.tile_geometry;
+
+            this.vel.y += this.gravity * delta;
+            this.vel = qm.add(this.vel, qm.scale(this.acc, delta));
+
+            this.vel = qm.clamp_mag(this.vel, 0, this.max_velocity);
+            this.vel.x = qm.clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
+
+            let end = qm.add(r.pos, qm.scale(this.vel, delta));
+            let trace = g.sweep_aabb(r.pos, end, r.bounds);
+
+            if (trace) {
+                let [p, n] = trace;
+                this.last_hit = trace;
+                r.pos.x = p.x + n.x;
+                r.pos.y = p.y + n.y;
+
+                if (n.y != 0) {
+                    this.vel.y = 0;
+                }
+                if (n.x != 0) {
+                    this.vel.x *= this.bounce_off_wall ? -1 : 0;
+                }
+            }
+            else {
+                r.pos.x = end.x;
+                r.pos.y = Math.floor(end.y);
+                // r.pos = end;
+            }
+
+            this.on_ground = !!this.trace_ground();
+        }
+    }
+}
+
+// ai
+namespace qi
+{
+    export class ai_movement extends qc.character_movement
+    {
+        public tick(delta: number)
+        {
+            if (this.on_ground)
+                this.vel.x *= 0.8;
+            
+            super.tick(delta);
+        }
+    }
+
+    export class enemy_controller extends qf.component_base
+    {
+        public target: qf.actor;
+        public root: qf.prmitive_component;
+
+        public init()
+        {
+            super.init();
+            this.target = this.owner.world.player;
+            this.root = this.owner.root;
+        }
+    }
+
+    export class slime_ai extends enemy_controller
+    {
+        public mov: qc.character_movement;
+
+        public init()
+        {
+            super.init();
+            [this.mov] = this.owner.getcmp(qc.character_movement);
+            this.mov.bounce_off_wall = true;
+
+            this.getworld().timer.delay(Math.random() * 1, _ => {
+                this.getworld().timer.every(3, this.do_jump.bind(this));
+            });
+        }
+
+        public do_jump(): void
+        {
+            let d = qm.sign(qm.sub(this.target.getpos(), this.root.pos));
+            let w = this.getworld();
+            let start = this.root.pos;
+            console.log(`jump`);
+
+            let jump = qm.v(300 * d.x, -300);
+
+            let hit = w.sweep_aabb(start, qm.add(start, qm.v(20 * d.x, -20)), this.root.bounds);
+            this.mov.vel = hit ? qm.mul(jump, qm.v(0.2, 1)) : jump;
+        }
+    }
+
+    export function spawn_slime(world: qf.world, {x, y}): qf.actor
+    {
+        let a = world.spawn_actor();
+        let r = qf.attach_prim(a, new qf.rect_primitve(), {x, y, root: true});
+        r.fill_color = 'blue';
+        qf.attach_cmp(a, new ai_movement());
+        qf.attach_cmp(a, new slime_ai());
+        return a;
+    }
+}
+
 namespace qg
 {
-    class game_world extends qc.world
+    class game_world extends qf.world
     {
         public geometry: ql.tile_geometry;
 
@@ -672,27 +893,8 @@ namespace qg
         }
     }
 
-    class player_movement extends qc.component_base
+    class player_movement extends qc.character_movement
     {
-        // setup
-        // any axis
-        public max_velocity = 300;
-        // x axis
-        public max_velocity_on_ground = 200;
-        public gravity = 1000;
-
-        // runtime data
-        public vel = qm.v();
-        public acc = qm.v();
-        public last_hit: qm.hit_result;
-        public on_ground = false;
-        public moving_left = false;
-
-        public init()
-        {
-
-        }
-
         public process_input() {
             const speed = 900;
 
@@ -722,7 +924,7 @@ namespace qg
                     let wall_trace = this.trace_wall(5);
                     if (wall_trace) {
                         let [p, n] = wall_trace;
-                        let r = (<qc.actor>this.owner).root;
+                        let r = (<qf.actor>this.owner).root;
                         let dist = qm.mag(qm.sub(p, r.pos)) - r.bounds.x / 2;
 
                         let do_jump = false;
@@ -746,74 +948,15 @@ namespace qg
             }
         }
 
-        public trace_wall(dist = 2): qm.hit_result
-        {
-            let a = this.owner;
-            let r = a.root;
-            let w = a.world;
-            let g = w.geometry as ql.tile_geometry;
-
-            let left = qm.scale(qm.left, r.bounds.x * 0.5  + dist);
-            let right = qm.scale(qm.right, r.bounds.x * 0.5 + dist);
-
-            let trace = g.line_trace2(r.pos, qm.add(r.pos, left));
-            return trace ? trace : g.line_trace2(r.pos, qm.add(r.pos, right));
-        }
-
-        public trace_ground(): qm.hit_result
-        {
-            let a = this.owner;
-            let r = a.root;
-            let w = a.world;
-            let g = w.geometry as ql.tile_geometry;
-
-            let down = qm.scale(qm.down, r.bounds.y + 1)
-            return g.line_trace2(r.pos, qm.add(r.pos, down));
-        }
-        
         public tick(delta: number)
         {
-            let a = this.owner as qc.actor;
-            let r = a.root;
-
-            let w = a.world as qc.world;
-            let g = w.geometry as ql.tile_geometry;
-            let h = r.bounds.y;
-
             this.process_input();
-            
-            this.vel.y += this.gravity * delta;
-            this.vel = qm.add(this.vel, qm.scale(this.acc, delta));
-
-            this.vel = qm.clamp_mag(this.vel, 0, this.max_velocity);
-            this.vel.x = qm.clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
-
-            let end = qm.add(r.pos, qm.scale(this.vel, delta));
-            let trace = g.sweep_aabb(r.pos, end, r.bounds);
-
-            if (trace) {
-                let [p, n] = trace;
-                this.last_hit = trace;
-                r.pos.x = p.x + n.x;
-                r.pos.y = p.y + n.y;
-
-                if (n.y != 0) {
-                    this.vel.y = 0;
-                }
-                if (n.x != 0) {
-                    this.vel.x = 0;
-                }
-            }
-            else {
-                r.pos = end;
-            }
-
-            this.on_ground = !!this.trace_ground();
+            super.tick(delta);
         }
     }
 
 
-    class projectile_movement extends qc.component_base
+    class projectile_movement extends qf.component_base
     {
         public acc = qm.v(0, 1000);
         public vel = qm.v();
@@ -844,7 +987,9 @@ namespace qg
         }
     }
 
-    class debug_draw_collisions extends qc.prmitive_component
+    export var g_draw_considered = false;
+
+    class debug_draw_collisions extends qf.prmitive_component
     {
         public tiles: ql.tile_geometry;
 
@@ -880,8 +1025,7 @@ namespace qg
             ctx.strokeStyle = 'pink';
             for (let act of this.owner.world.actors)
             {
-                for (let p of act.components.filter(c => c instanceof qc.prmitive_component) as qc.prmitive_component[])
-                {
+                for (let p of act.getcmp(qf.prmitive_component)) {
                     let h = qm.scale(p.bounds, 0.5);
                     ctx.strokeRect(p.pos.x - h.x, p.pos.y - h.y, h.x * 2, h.y * 2);
                 }
@@ -898,7 +1042,8 @@ namespace qg
 
             ctx.strokeStyle = 'green';
             ctx.lineWidth = 0.5;
-            // for (let r of considered) ctx.strokeRect(r.x, r.y, tl, tl);
+            if (g_draw_considered)
+                for (let r of considered) ctx.strokeRect(r.x, r.y, tl, tl);
 
             // let hits = this.tiles.d_hits;
             // for (let [p, n] of hits) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
@@ -908,22 +1053,22 @@ namespace qg
         }
     }
 
-    function spawn_projectile(world: qc.world, loc: qm.vec, dir: qm.vec): qc.actor
+    function spawn_projectile(world: qf.world, loc: qm.vec, dir: qm.vec): qf.actor
     {
         let a = world.spawn_actor();
 
-        let r = qc.attach_prim(a, new qc.rect_primitve(), {root: true});
+        let r = qf.attach_prim(a, new qf.rect_primitve(), {root: true});
         r.pos = loc;
         r.bounds = qm.v(10, 3);
         r.fill_color = 'rgba(0, 255, 0, 0.7)';
 
-        let p = qc.attach_cmp(a, new projectile_movement());
+        let p = qf.attach_cmp(a, new projectile_movement());
         p.vel = dir;
 
         return a;
     }
 
-    class player_controller extends qc.component_base
+    class player_controller extends qf.component_base
     {
         private movement: player_movement;
         private z_press_start = -1;
@@ -962,8 +1107,9 @@ namespace qg
         }
     }
 
-    function parse_level(data: string, geom: ql.tile_geometry): void
+    function parse_level(data: string, world: game_world): void
     {
+        let geom = world.geometry;
         let x = 0, y = 0;
         for (let line of data.split('\n'))
         {
@@ -971,13 +1117,14 @@ namespace qg
             for (let char of line)
             {
                 if (char === '#') geom.set_blocking(x, y, true);
+                if (char === 's') qi.spawn_slime(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
                 x += 1;
             }
             y += 1;
         }
     }
 
-    let world: qc.world;
+    let world: qf.world;
     let ctx: CanvasRenderingContext2D;
 
     function tick()
@@ -995,11 +1142,27 @@ namespace qg
         ctx.translate(10.5, 10.5);
         let t = new ql.tile_geometry(21, 21, 14);
 
+        world = new game_world();
+        world.geometry = t;
+
+
+
+        let player = world.spawn_actor();
+
+        let tdebug = new debug_draw_collisions();
+
+        qf.attach_rect(player, {x: 100, y: 190, width: 12, height: 12, fill: 'rgba(255, 0, 0, .5)', root: true});
+        qf.attach_cmp(player, new player_movement());
+        qf.attach_prim(player, tdebug, {x: 0, y: 0});
+        qf.attach_cmp(player, new player_controller());
+
+        world.player = player;
+
         parse_level(
 `####################
 #                  #
 #                  #
-#                  #
+#    s         s   #
 #   ####      ###  #
 #      #      #    #
 #      #      #    #
@@ -1015,20 +1178,9 @@ namespace qg
 #                  #
 #                  #
 #           ####   #
-#           #      #
+#   s       #      #
 ####################`
-        , t)
-
-        world = new game_world();
-        world.geometry = t;
-        let player = world.spawn_actor();
-
-        let tdebug = new debug_draw_collisions();
-
-        qc.attach_rect(player, {x: 100, y: 190, width: 12, height: 12, fill: 'rgba(255, 0, 0, .5)', root: true});
-        qc.attach_cmp(player, new player_movement());
-        qc.attach_prim(player, tdebug, {x: 0, y: 0});
-        qc.attach_cmp(player, new player_controller());
+                    , world)
 
         qs.input.init(canvas);
         window.requestAnimationFrame(tick);
