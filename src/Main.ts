@@ -22,6 +22,7 @@ namespace qm
 
     export function v(x = 0, y = 0) { return new vec(x, y); }
     export function vc(a: vec) { return new vec(a.x, a.y); }
+    export function eq(a: vec, b: vec) { return a.x == b.x && a.y == b.y; }
     export function add(a: vec, b: vec) { return v(a.x + b.x, a.y + b.y); }
     export function sub(a: vec, b: vec) { return v(a.x - b.x, a.y - b.y); }
     export function mul(a: vec, b: vec) { return v(a.x * b.x, a.y * b.y); }
@@ -41,6 +42,7 @@ namespace qm
 
     // general math
     export function clamp(x: number, min: number, max: number) { return Math.max(Math.min(x, max), min); }
+    export function rnd(min = 0, max = 1) { return min + (max - min) * Math.random(); }
 
     export type aabb = [vec, vec];
 
@@ -231,6 +233,10 @@ namespace qu
     export function assert(cond: boolean, msg = `Assert failed`)
     {
         if (!cond) throw new Error(msg);
+    }
+
+    export function contains<T>(arr: T[], elem: T): boolean {
+        return arr.indexOf(elem) >= 0;
     }
 }
 
@@ -731,7 +737,7 @@ namespace ql
             return hit_result;
         }
 
-        private project_on_grid(point: qm.vec): qm.vec
+        public project_on_grid(point: qm.vec): qm.vec
         {
             return qm.v(Math.floor(point.x / this.tile_size), Math.floor(point.y / this.tile_size));
         }
@@ -800,7 +806,7 @@ namespace qc {
                     this.vel.y = 0;
                 }
                 if (n.x != 0) {
-                    this.vel.x *= this.bounce_off_wall ? -1 : 0;
+                    this.vel.x *= this.bounce_off_wall ? -qm.rnd(0.9, 1) : 0;
                 }
             }
             else {
@@ -817,6 +823,64 @@ namespace qc {
 // ai
 namespace qi
 {
+    export var paths: qm.vec[][] = [];
+
+    export function find_path(start: qm.vec, end: qm.vec, geom: ql.tile_geometry): qm.vec[]
+    {
+        let s = geom.project_on_grid(start);
+        let e = geom.project_on_grid(end);
+        let id = (v: qm.vec) => v.y * geom.width + v.x;
+        // let pos = n => [n % geom.width, Math.floor(n / geom.width)];
+
+        let open:  qm.vec[] = [s];
+        let visited: number[] = [id(s)];
+        let prev:  number[] = [-1];
+        // let data: {prev, dist}[] = [{prev: -1, dist: 0}];
+
+        const offsets = [qm.v(-1, -1), /*qm.v(0, -1),*/ qm.v(1, -1),
+                         qm.v(-1, 0),               qm.v(1, 0),
+                         qm.v(-1, 1),  qm.v(0, 1),  qm.v(1, 1),
+                                       qm.v(0, -1)];
+
+        while (open.length) { 
+            let unseen = open.shift();
+            if (qm.eq(unseen, e)) break;
+
+            for (let off of offsets)
+            {
+                let n_loc = qm.add(unseen, off);
+
+                if (!geom.is_blocking(n_loc.x, n_loc.y))
+                {
+                    let n_id = id(n_loc);
+                    if (!qu.contains(visited, n_id)) {
+                        open.push(n_loc);
+                        visited.push(n_id);
+                        prev.push(id(unseen));
+                    }
+                }
+            }
+        }
+
+        let id_to_loc = (id: number) => {
+            return qm.scale(qm.v(id % geom.width + 0.5, Math.floor(id / geom.width) + 0.5), geom.tile_size);
+        }
+
+        let path: qm.vec[] = [id_to_loc(id(e))];
+        for (let idx = visited.indexOf(id(e)); idx != -1;) {
+            let tile_id = prev[idx];
+            if (tile_id == -1) {
+                break;
+            } 
+
+            path.unshift(id_to_loc(tile_id));
+            idx = visited.indexOf(tile_id);
+        }
+
+        paths.push(path);
+        return path.length > 1 ? path : undefined;
+    }
+
     export class ai_movement extends qc.character_movement
     {
         public tick(delta: number)
@@ -851,21 +915,28 @@ namespace qi
             [this.mov] = this.owner.getcmp(qc.character_movement);
             this.mov.bounce_off_wall = true;
 
-            this.getworld().timer.delay(Math.random() * 1, _ => {
-                this.getworld().timer.every(3, this.do_jump.bind(this));
+            this.getworld().timer.delay(qm.rnd(), _ => {
+                this.getworld().timer.every(qm.rnd(2.6, 3), this.do_jump.bind(this));
             });
         }
 
         public do_jump(): void
         {
-            let d = qm.sign(qm.sub(this.target.getpos(), this.root.pos));
+            let dir = qm.sign(qm.sub(this.target.getpos(), this.root.pos));
             let w = this.getworld();
             let start = this.root.pos;
-            console.log(`jump`);
 
-            let jump = qm.v(300 * d.x, -300);
+            // debug
+            qi.paths = [];
 
-            let hit = w.sweep_aabb(start, qm.add(start, qm.v(20 * d.x, -20)), this.root.bounds);
+            let path = qi.find_path(start, this.target.root.pos, this.getworld().geometry);
+            if (path) {
+                dir = qm.sign(qm.sub(path[1], path[0]));
+            }
+
+            let jump = qm.scale(qm.v(300 * dir.x, -300), qm.rnd(0.8, 1));
+
+            let hit = w.sweep_aabb(start, qm.add(start, qm.v(20 * dir.x, -20)), this.root.bounds);
             this.mov.vel = hit ? qm.mul(jump, qm.v(0.2, 1)) : jump;
         }
     }
@@ -1031,6 +1102,18 @@ namespace qg
                 }
             }
 
+            ctx.strokeStyle = 'green';
+            for (let path of qi.paths) {
+                if (path.length == 0) continue;
+                ctx.beginPath();
+                ctx.moveTo(path[0].x, path[0].y);
+                for (let node of path) {
+                    ctx.lineTo(node.x, node.y);
+                }
+                ctx.stroke();
+            }
+            // qi.paths = [];
+
             // ctx.beginPath();
             // ctx.moveTo(pos.x, pos.y);
             // ctx.lineTo(end.x, end.y);
@@ -1162,7 +1245,7 @@ namespace qg
 `####################
 #                  #
 #                  #
-#    s         s   #
+#              s   #
 #   ####      ###  #
 #      #      #    #
 #      #      #    #
@@ -1172,13 +1255,13 @@ namespace qg
 #      #      #    #
 #                  #
 #                  #
-#                  #
+#       s          #
 #       ###        #
 #                  #
 #                  #
-#                  #
 #           ####   #
-#   s       #      #
+#           #      #
+#           #      #
 ####################`
                     , world)
 
