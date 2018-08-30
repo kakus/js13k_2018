@@ -548,9 +548,15 @@ namespace qs
 // collision
 namespace ql
 {
+    const tile_offsets = [
+        qm.v(-1, -1), qm.v(0, -1), qm.v(1, -1),
+        qm.v(-1,  0),              qm.v(1,  0),
+        qm.v(-1,  1), qm.v(0,  1), qm.v(1,  1)];
+
     export class tile_geometry
     {
         public tile_map: boolean[][] = [];
+        public blocking_dist: number[][] = [];
 
         // debug
         public d_considered: qm.vec[] = [];
@@ -563,23 +569,53 @@ namespace ql
         ) {
             qu.assert(width > 0 && height > 0);
 
-            for (let i = 0; i < height; ++i)
-            {
-                this.tile_map[i] = [];
-                for (let j = 0; j < width; ++j)
-                    this.tile_map[i][j] = false;
+            for (let i = 0; i < height; ++i) {
+                this.tile_map[i] = new Array(width).fill(false);
+                this.blocking_dist[i] = new Array(width).fill(99);
             }
         }
 
         public set_blocking(x: number, y: number, blocking: boolean): void
         {
-            if (x >= 0 && x < this.width && y >= 0 && y < this.height) 
+            // currently only support this;
+            qu.assert(blocking === true);
+            if (this.is_valid({x, y})) 
             {
                 this.tile_map[y][x] = blocking;
+                this.update_blocking_dist(qm.v(x, y), 0);
             }
-            else
-            {
+            else {
                 qu.assert(false, `${x} != [0, ${this.width}) || ${y} != [0, ${this.height})`);
+            }
+        }
+        
+        public get_blocking_distance(n: qm.vec): number {
+            if (this.is_valid(n)) {
+                return this.blocking_dist[n.y][n.x];
+            }
+            return Number.MAX_VALUE;
+        }
+
+        public is_valid(loc: qm.vec): boolean {
+            return loc.x >= 0 && loc.x < this.width && loc.y >= 0 && loc.y < this.height;
+        }
+
+        protected update_blocking_dist(node: qm.vec, dist: number): void {
+            let open: [qm.vec, number][] = [[node, dist]];
+
+            while (open.length) {
+                let [node, dist] = open.shift();
+                this.blocking_dist[node.y][node.x] = dist;
+
+                for (let offset of tile_offsets) {
+                    let n = qm.add(node, offset);
+                    if (this.is_valid(n)) {
+                        if (this.blocking_dist[n.y][n.x] > dist + 1) {
+                            this.blocking_dist[n.y][n.x] = dist + 1;
+                            open.push([n, dist + 1]);
+                        }
+                    }
+                }
             }
         }
 
@@ -594,8 +630,8 @@ namespace ql
 
         public foreach_tile_along_path(start_loc: qm.vec, end_loc: qm.vec, fn: (x: number, y: number) => boolean): void
         {
-            let s = this.project_on_grid(start_loc);
-            let e = this.project_on_grid(end_loc);
+            let s = this.project(start_loc);
+            let e = this.project(end_loc);
             let d = qm.sub(e, s);
 
             const dir = qm.sub(end_loc, start_loc);
@@ -737,7 +773,7 @@ namespace ql
             return hit_result;
         }
 
-        public project_on_grid(point: qm.vec): qm.vec
+        public project(point: qm.vec): qm.vec
         {
             return qm.v(Math.floor(point.x / this.tile_size), Math.floor(point.y / this.tile_size));
         }
@@ -825,10 +861,18 @@ namespace qi
 {
     export var paths: qm.vec[][] = [];
 
-    export function find_path(start: qm.vec, end: qm.vec, geom: ql.tile_geometry): qm.vec[]
+    export type path_filter = (geom: ql.tile_geometry, s: qm.vec, e: qm.vec) => boolean;
+    export function default_walk_filter(geom: ql.tile_geometry, s: qm.vec, e: qm.vec): boolean {
+        if (geom.is_blocking(e.x, e.y)) return false;
+        if (geom.get_blocking_distance(e) > 2) return false;
+
+        return true;
+    }
+
+    export function find_path(start: qm.vec, end: qm.vec, geom: ql.tile_geometry, can_walk = default_walk_filter): qm.vec[]
     {
-        let s = geom.project_on_grid(start);
-        let e = geom.project_on_grid(end);
+        let s = geom.project(start);
+        let e = geom.project(end);
         let id = (v: qm.vec) => v.y * geom.width + v.x;
         // let pos = n => [n % geom.width, Math.floor(n / geom.width)];
 
@@ -837,10 +881,10 @@ namespace qi
         let prev:  number[] = [-1];
         // let data: {prev, dist}[] = [{prev: -1, dist: 0}];
 
-        const offsets = [qm.v(-1, -1), /*qm.v(0, -1),*/ qm.v(1, -1),
-                         qm.v(-1, 0),               qm.v(1, 0),
-                         qm.v(-1, 1),  qm.v(0, 1),  qm.v(1, 1),
-                                       qm.v(0, -1)];
+        const offsets = [qm.v(-1, 0),               qm.v(1, 0),
+                         qm.v(-1, -1), qm.v(0, -1), qm.v(1, -1),
+                         qm.v(-1, 1),               qm.v(1, 1),
+                                       qm.v(0, 1) ];
 
         while (open.length) { 
             let unseen = open.shift();
@@ -850,8 +894,7 @@ namespace qi
             {
                 let n_loc = qm.add(unseen, off);
 
-                if (!geom.is_blocking(n_loc.x, n_loc.y))
-                {
+                if (can_walk(geom, unseen, n_loc)) {
                     let n_id = id(n_loc);
                     if (!qu.contains(visited, n_id)) {
                         open.push(n_loc);
@@ -881,12 +924,42 @@ namespace qi
         return path.length > 1 ? path : undefined;
     }
 
+
     export class ai_movement extends qc.character_movement
     {
+        // setup
+        public on_ground_acc = 500;
+        public jump_vel = 300;
+
+        // runtime
+        public input = qm.v();
+
         public tick(delta: number)
         {
-            if (this.on_ground)
+            if (this.input.x != 0) {
+                this.acc.x = this.input.x * this.on_ground_acc;
+            }
+            else if (this.on_ground) {
                 this.vel.x *= 0.8;
+            }
+
+            if (this.input.y < 0) {
+                let wall_hit = this.trace_wall(3);
+                if (this.on_ground && !wall_hit) {
+                    this.vel.y = -this.jump_vel;
+                }
+                else if (wall_hit) {
+                    let [p, n] = wall_hit;
+                    if (n.x > 0) {
+                        this.vel.y = -this.jump_vel;
+                        this.vel.x = 80;
+                    }
+                    else if (n.x < 0) {
+                        this.vel.y = -this.jump_vel;
+                        this.vel.x = -80;
+                    }
+                }
+            }
             
             super.tick(delta);
         }
@@ -941,6 +1014,27 @@ namespace qi
         }
     }
 
+    export class humanoid_ai extends enemy_controller {
+        public mov: qi.ai_movement;
+
+        public init() {
+            super.init()
+            this.mov = this.owner.getcmp(qi.ai_movement)[0];
+        }
+
+        public tick(delta: number) {
+            let path = qi.find_path(this.root.pos, this.target.root.pos, this.getworld().geometry);
+            if (path) {
+                // let dist = qm.mag(qm.sub(this.target.root.pos, this.root.pos));
+                this.mov.input = qm.scale(qm.sign(qm.sub(path[1], path[0])), qm.rnd(0.5, 1));
+            }
+            else {
+                this.mov.input.x = 0;
+                this.mov.input.y = 0;
+            }
+        }
+    }
+
     export function spawn_slime(world: qf.world, {x, y}): qf.actor
     {
         let a = world.spawn_actor();
@@ -948,6 +1042,16 @@ namespace qi
         r.fill_color = 'blue';
         qf.attach_cmp(a, new ai_movement());
         qf.attach_cmp(a, new slime_ai());
+        return a;
+    }
+
+    export function spawn_humanoid(world: qf.world, {x, y}): qf.actor
+    {
+        let a = world.spawn_actor();
+        let r = qf.attach_prim(a, new qf.rect_primitve(), {x, y, root: true});
+        r.fill_color = 'orange';
+        qf.attach_cmp(a, new ai_movement());
+        qf.attach_cmp(a, new humanoid_ai());
         return a;
     }
 }
@@ -995,7 +1099,7 @@ namespace qg
                     let wall_trace = this.trace_wall(5);
                     if (wall_trace) {
                         let [p, n] = wall_trace;
-                        let r = (<qf.actor>this.owner).root;
+                        let r = this.owner.root;
                         let dist = qm.mag(qm.sub(p, r.pos)) - r.bounds.x / 2;
 
                         let do_jump = false;
@@ -1059,6 +1163,7 @@ namespace qg
     }
 
     export var g_draw_considered = false;
+    export var g_draw_blocking_dist = false;
 
     class debug_draw_collisions extends qf.prmitive_component
     {
@@ -1081,21 +1186,20 @@ namespace qg
             // const pos = qm.transform(this.query_start.root.pos, to_local)
             // const end = qm.transform(qs.input.mouse.pos, to_local);
 
-            for (let x = 0; x < this.tiles.width; ++x)
-            {
-                for (let y = 0; y < this.tiles.height; ++y) 
-                {
-                    if (this.tiles.is_blocking(x, y))
-                    {
+            for (let x = 0; x < this.tiles.width; ++x) {
+                for (let y = 0; y < this.tiles.height; ++y) {
+                    if (this.tiles.is_blocking(x, y)) {
                         ctx.strokeRect(x * tl, y * tl, tl, tl);
                         // this.tiles.line_trace_tile(pos, end, x, y);
+                    }
+                    if (g_draw_blocking_dist) {
+                        ctx.fillText(this.tiles.blocking_dist[y][x].toFixed(0), x * tl, (y + 1) * tl);
                     }
                 }
             }
 
             ctx.strokeStyle = 'pink';
-            for (let act of this.owner.world.actors)
-            {
+            for (let act of this.owner.world.actors) {
                 for (let p of act.getcmp(qf.prmitive_component)) {
                     let h = qm.scale(p.bounds, 0.5);
                     ctx.strokeRect(p.pos.x - h.x, p.pos.y - h.y, h.x * 2, h.y * 2);
@@ -1201,6 +1305,7 @@ namespace qg
             {
                 if (char === '#') geom.set_blocking(x, y, true);
                 if (char === 's') qi.spawn_slime(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
+                if (char === 's') qi.spawn_humanoid(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
                 x += 1;
             }
             y += 1;
@@ -1255,7 +1360,7 @@ namespace qg
 #      #      #    #
 #                  #
 #                  #
-#       s          #
+#       h          #
 #       ###        #
 #                  #
 #                  #
