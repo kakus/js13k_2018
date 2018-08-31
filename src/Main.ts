@@ -63,10 +63,18 @@ namespace qm
         return [qm.scale(qm.add(tl, br), 0.5), qm.scale(qm.sub(br, tl), 0.5)];
     }
 
-    // position, normal
-    export type hit_result = [qm.vec, qm.vec];
+    export function overlap_point(a: qm.vec, [c, ext]: qm.aabb): boolean {
+        let d = qm.sub(a, c);
+        return Math.abs(d.x) <= ext.x && Math.abs(d.y) <= ext.y;
+    }
+    export function overlap_aabb([ac, aext]: aabb, [bc, bext]: aabb): boolean {
+        return qm.overlap_point(ac, [bc, qm.add(aext, bext)]);
+    }
 
-    export function line_trace_aabb(start: qm.vec, end: qm.vec, aabb: qm.aabb): hit_result
+    // position, normal
+    export type line_trace_result = [qm.vec, qm.vec];
+
+    export function line_trace_aabb(start: qm.vec, end: qm.vec, aabb: qm.aabb): line_trace_result
     {
         let get_vertex = (i: number) => {
             let [center, ext] = aabb;
@@ -245,12 +253,43 @@ namespace qu
     export function contains<T>(arr: T[], elem: T): boolean {
         return arr.indexOf(elem) >= 0;
     }
+
+    export function upper_bound<T>(arr: T[], cmp: (a: T, b: T) => boolean): T {
+        if (arr.length == 0) {
+            return undefined;
+        }
+
+        let selected = 0;
+        for (let i = 1; i < arr.length; ++i) {
+            if (cmp(arr[selected], arr[i])) {
+                selected = i;
+            }
+        }
+        return arr[selected];
+    }
 }
 
 // framework
 namespace qf 
 {
     export function unimplemented() { throw new Error("unimplemented"); }
+
+    export class hit_result {
+        constructor(
+            public readonly pos: qm.vec = qm.zero,
+            public readonly normal: qm.vec = qm.up,
+            public readonly actor: qf.actor = undefined
+        ) { }
+    }
+
+    // collision channgel
+    export const enum cc {
+        none      = 0,
+        geom      = 1 << 1,
+        visibilty = 1 << 2,
+        pawn      = 1 << 3,
+        all       = 0xffffffff
+    }
 
     export abstract class component_base
     {
@@ -266,6 +305,7 @@ namespace qf
         public rot: number = 0;
         public parent: prmitive_component;
         public bounds: qm.vec = qm.v(0, 0);
+        public collision_mask = cc.none;
 
         public render_c2d(ctx: CanvasRenderingContext2D): void
         {
@@ -279,13 +319,15 @@ namespace qf
             ctx.restore();
         }
 
-        public get_local_transform(): qm.mat
-        {
+        public get_aabb(ext: qm.vec = qm.zero): qm.aabb {
+            return [qm.vc(this.pos), qm.add(qm.scale(qm.mul(this.bounds, this.scale), 0.5), ext)];
+        }
+
+        public get_local_transform(): qm.mat {
             return qm.mat(this.scale.x, 0, 0, this.scale.y, this.pos.x, this.pos.y);
         }
 
-        public get_world_transform(): qm.mat
-        {
+        public get_world_transform(): qm.mat {
             let base = this.parent ? this.parent.get_world_transform() : qm.mat();
             qm.mat_mul(base, this.get_local_transform(), base);
             return base;
@@ -331,12 +373,13 @@ namespace qf
         return cmp;
     }
 
-    export function attach_prim<T extends prmitive_component>(owner: actor, prim: T, {x = 0, y = 0, width = 10, height = 10, root = false}): T
+    export function attach_prim<T extends prmitive_component>(owner: actor, prim: T, {x = 0, y = 0, width = 10, height = 10, root = false, coll_mask = qf.cc.none}): T
     {
         prim.pos.x = x;
         prim.pos.y = y;
         prim.bounds.x = width;
         prim.bounds.y = height;
+        prim.collision_mask = coll_mask;
 
         if (root) owner.root = prim;
         return attach_cmp(owner, prim);
@@ -349,10 +392,12 @@ namespace qf
         return attach_prim(owner, r, {x, y, width, height, root});
     }
 
+
+
     export class world
     {
         public actors: actor[] = [];
-        public geometry: any;
+        public geometry: ql.tile_geometry;
         public player: actor;
         public timer = new timer();
 
@@ -387,8 +432,40 @@ namespace qf
             actor.world = undefined;
         }
 
-        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.hit_result { 
-            return undefined; 
+        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec, channel = qf.cc.all): qf.hit_result {
+            const area = qm.make_aabb(start, end);
+            const half_size = qm.scale(size, 0.5);
+
+            let hits: qf.hit_result[] = [];
+
+            if (channel & cc.geom) {
+                let hit = this.geometry.sweep_aabb(start, end, size);
+                if (hit) {
+                    hits.push(new hit_result(hit[0], hit[1]));
+                }
+            }
+
+            if (channel === qf.cc.geom) {
+                return hits[0];
+            }
+
+            for (let actor of this.actors) {
+                if (actor.root) {
+                    let actor_aabb = actor.root.get_aabb(half_size);
+                    if (qm.overlap_aabb(area, actor_aabb) && (actor.root.collision_mask & channel)) {
+                        let hit = qm.line_trace_aabb(start, end, actor_aabb);
+                        if (hit) {
+                            hits.push(new hit_result(hit[0], hit[1], actor));
+                        } else {
+                            hits.push(new hit_result(start, qm.up, actor));
+                        }
+                    }
+                }
+            }
+
+            return qu.upper_bound(hits, (a, b) => {
+                return qm.mag_sqr(qm.sub(a.pos, start)) > qm.mag_sqr(qm.sub(b.pos, start));
+            })
         }
     }
 
@@ -411,7 +488,7 @@ namespace qf
         }
 
         public reset() { 
-            this.fire_in = this.delay; 
+            this.fire_in += this.delay; 
         }
     }
 
@@ -738,6 +815,7 @@ namespace ql
                 else break;
             }
         }
+
         public line_trace2(start_loc: qm.vec, end_loc: qm.vec): [qm.vec, qm.vec]
         {
             let hit_result: [qm.vec, qm.vec];
@@ -759,28 +837,28 @@ namespace ql
             return hit_result;
         }
 
-        public line_trace_tile(start: qm.vec, end: qm.vec, x: number, y: number): qm.hit_result
+        public line_trace_tile(start: qm.vec, end: qm.vec, x: number, y: number): qm.line_trace_result
         {
             const ts = this.tile_size;
             return qm.line_trace_aabb(start, end, [qm.scale(qm.v(x + 0.5, y + 0.5), ts), qm.v(ts / 2, ts / 2)]);
         }
 
-        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.hit_result
+        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.line_trace_result
         {
-            let grid_size = qm.v(
+            let size_on_grid = qm.v(
                 Math.max(0, Math.ceil(size.x / this.tile_size) + 1), 
                 Math.max(0, Math.ceil(size.y / this.tile_size) + 1));
 
-            let ext = qm.v(Math.floor(grid_size.x / 2), Math.floor(grid_size.y / 2));
+            let ext = qm.v(Math.floor(size_on_grid.x / 2), Math.floor(size_on_grid.y / 2));
             const ts = this.tile_size;
             const half_ts = qm.scale(qm.v(ts, ts), 0.5);
             const half_size = qm.scale(size, 0.5);
 
-            let hit_result: qm.hit_result;
+            let hit_result: qm.line_trace_result;
 
             this.foreach_tile_along_path(start, end, (x, y) => {
 
-                let hits: qm.hit_result[] = [];
+                let hits: qm.line_trace_result[] = [];
 
                 for (let iy = y - ext.y; iy <= y + ext.y; ++iy)
                 {
@@ -820,7 +898,6 @@ namespace ql
 
             return hit_result;
         }
-
 
         public find_path(start: qm.vec, end: qm.vec, is_conn_allowed: path_filter): qm.vec[] {
             let s = this.project(start);
@@ -889,11 +966,11 @@ namespace qc {
         // runtime data
         public vel = qm.v();
         public acc = qm.v();
-        public last_hit: qm.hit_result;
+        public last_hit: qm.line_trace_result;
         public on_ground = false;
         public moving_left = false;
 
-        public trace_wall(dist = 2): qm.hit_result {
+        public trace_wall(dist = 2): qm.line_trace_result {
             let r = this.owner.root;
             let g = this.owner.world.geometry as ql.tile_geometry;
 
@@ -901,7 +978,7 @@ namespace qc {
             return trace ? trace : g.sweep_aabb(r.pos, qm.add(r.pos, qm.scale(qm.right, dist)), r.bounds);
         }
 
-        public trace_ground(): qm.hit_result {
+        public trace_ground(): qm.line_trace_result {
             let r = this.owner.root;
             let g = this.owner.world.geometry as ql.tile_geometry;
             return g.sweep_aabb(r.pos, qm.add(r.pos, qm.down), r.bounds);
@@ -1058,7 +1135,7 @@ namespace qi
 
             let jump = qm.scale(qm.v(300 * dir.x, -300), qm.rnd(0.8, 1));
 
-            let hit = w.sweep_aabb(start, qm.add(start, qm.v(20 * dir.x, -20)), this.root.bounds);
+            let hit = w.sweep_aabb(start, qm.add(start, qm.v(20 * dir.x, -20)), this.root.bounds, qf.cc.geom);
             this.mov.vel = hit ? qm.mul(jump, qm.v(0.2, 1)) : jump;
         }
     }
@@ -1090,7 +1167,7 @@ namespace qi
     export function spawn_slime(world: qf.world, {x, y}): qf.actor
     {
         let a = world.spawn_actor();
-        let r = qf.attach_prim(a, new qf.rect_primitve(), {x, y, root: true});
+        let r = qf.attach_prim(a, new qf.rect_primitve(), {x, y, coll_mask: qf.cc.pawn, root: true});
         r.fill_color = 'blue';
         qf.attach_cmp(a, new ai_movement());
         qf.attach_cmp(a, new slime_ai());
@@ -1100,7 +1177,7 @@ namespace qi
     export function spawn_humanoid(world: qf.world, {x, y}): qf.actor
     {
         let a = world.spawn_actor();
-        let r = qf.attach_prim(a, new qf.rect_primitve(), {x, y, root: true});
+        let r = qf.attach_prim(a, new qf.rect_primitve(), {x, y, coll_mask: qf.cc.pawn, root: true});
         r.fill_color = 'orange';
         qf.attach_cmp(a, new ai_movement());
         qf.attach_cmp(a, new humanoid_ai());
@@ -1110,16 +1187,6 @@ namespace qi
 
 namespace qg
 {
-    class game_world extends qf.world
-    {
-        public geometry: ql.tile_geometry;
-
-        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec): qm.hit_result
-        {
-            return this.geometry.sweep_aabb(start, end, size);
-        }
-    }
-
     class player_movement extends qc.character_movement
     {
         public process_input() {
@@ -1202,7 +1269,7 @@ namespace qg
             {
                 this.vel = qm.v();
                 this.acc = qm.v();
-                [r.pos] = hit_result;
+                r.pos = hit_result.pos;
                 setTimeout( _ => this.owner.destory(), 1000);
                 this.tick = undefined;
             }
@@ -1366,7 +1433,7 @@ namespace qg
         }
     }
 
-    function parse_level(data: string, world: game_world): void
+    function parse_level(data: string, world: qf.world): void
     {
         let geom = world.geometry;
         let x = 0, y = 0;
@@ -1402,7 +1469,7 @@ namespace qg
         ctx.translate(10.5, 10.5);
         let t = new ql.tile_geometry(40, 20, 14);
 
-        world = new game_world();
+        world = new qf.world();
         world.geometry = t;
 
 
@@ -1434,7 +1501,7 @@ namespace qg
 #                                      #
 #                                      #
 #                                      #
-#                   h                  #
+#                                      #
 #             ####  ######    #####    #
 #    ### ######                        #
 #                                    s #
