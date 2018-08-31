@@ -15,10 +15,16 @@ namespace qm
         ) { }
     }
     
+    export const one = new cvec(1, 1);
+    export const zero = new cvec(0, 0);
     export const up = new cvec(0, -1);
     export const down = new cvec(0, 1);
     export const left = new cvec(-1, 0);
     export const right = new cvec(1, 0);
+    export const top_left = new cvec(-1, -1);
+    export const top_right = new cvec(1, -1);
+    export const bottom_left = new cvec(-1, 1);
+    export const bottom_right = new cvec(1, 1);
 
     export function v(x = 0, y = 0) { return new vec(x, y); }
     export function vc(a: vec) { return new vec(a.x, a.y); }
@@ -549,10 +555,17 @@ namespace qs
 // collision
 namespace ql
 {
-    const tile_offsets = [
-        qm.v(-1, -1), qm.v(0, -1), qm.v(1, -1),
-        qm.v(-1,  0),              qm.v(1,  0)];
-        // qm.v(-1,  1), qm.v(0,  1), qm.v(1,  1)];
+    const c_jump_calc_offsets = [
+        qm.top_left, qm.up, qm.top_right,
+        qm.left, qm.right];
+
+    // order of these offsets matter for algorithm execution
+    const c_breadth_search_offsets = [
+        qm.left, qm.right, qm.up,
+        qm.top_left, qm.top_right, qm.bottom_left,
+        qm.bottom_right, qm.down];
+
+    export type path_filter = (geom: ql.tile_geometry, s: qm.vec, e: qm.vec) => boolean;
 
     export class tile_geometry
     {
@@ -620,7 +633,7 @@ namespace ql
                 let [node, dist] = open.shift();
                 this.blocking_dist[node.y][node.x] = dist;
 
-                for (let offset of tile_offsets) {
+                for (let offset of c_jump_calc_offsets) {
                     let n = qm.add(node, offset);
                     if (this.is_valid(n)) {
                         if (this.blocking_dist[n.y][n.x] > dist + 1) {
@@ -808,6 +821,53 @@ namespace ql
             return hit_result;
         }
 
+
+        public find_path(start: qm.vec, end: qm.vec, is_conn_allowed: path_filter): qm.vec[] {
+            let s = this.project(start);
+            let e = this.project(end);
+            let id = (v: qm.vec) => v.y * this.width + v.x;
+
+            let open: qm.vec[] = [s];
+            let visited: number[] = [id(s)];
+            let prev: number[] = [-1];
+
+            while (open.length) {
+                let start = open.shift();
+                if (qm.eq(start, e)) break;
+
+                for (let offset of c_breadth_search_offsets) {
+                    let n_loc = qm.add(start, offset);
+
+                    if (is_conn_allowed(this, start, n_loc)) {
+                        let n_id = id(n_loc);
+                        if (!qu.contains(visited, n_id)) {
+                            open.push(n_loc);
+                            visited.push(n_id);
+                            prev.push(id(start));
+                        }
+                    }
+                }
+            }
+
+            let id_to_loc = (id: number) => {
+                return qm.scale(qm.v(id % this.width + 0.5, Math.floor(id / this.width) + 0.5), this.tile_size);
+            }
+
+            let path: qm.vec[] = [id_to_loc(id(e))];
+            for (let idx = visited.indexOf(id(e)); idx != -1;) {
+                let tile_id = prev[idx];
+                if (tile_id == -1) {
+                    break;
+                }
+
+                path.unshift(id_to_loc(tile_id));
+                idx = visited.indexOf(tile_id);
+            }
+
+            // paths.push(path);
+            return path.length > 1 ? path : undefined;
+        }
+
         public project(point: qm.vec): qm.vec
         {
             return qm.v(Math.floor(point.x / this.tile_size), Math.floor(point.y / this.tile_size));
@@ -887,85 +947,31 @@ namespace qc {
 // ai
 namespace qi
 {
-    export var paths: qm.vec[][] = [];
+    export var g_paths: qm.vec[][] = [];
 
-    export type path_filter = (geom: ql.tile_geometry, s: qm.vec, e: qm.vec) => boolean;
     export function default_walk_filter(geom: ql.tile_geometry, s: qm.vec, e: qm.vec): boolean {
+        let e_dist = geom.get_blocking_dist(e);
 
-        if (geom.is_blocking(e.x, e.y)) {
-            return false;
-        }
+        // end is blocking tile
+        if (e_dist == 0) return false;
 
         let dir = qm.sub(e, s);
         let e_floor = geom.get_floor_dist(e);
 
+        // we can move horizontaly only on tiles that are floors
         if (dir.y == 0 && e_floor > 1) return false;
 
-        let e_dist = geom.get_blocking_dist(e);
         let s_jump = geom.get_jump_dist(s);
 
+        // if we want to go up
         if (dir.y < 0) {
+            // we can go straight up only near walls
             if (dir.x == 0 && e_dist > 1) return false;
+            // we can keep goin up while we are near floor or walls
             if (dir.x != 0 && s_jump > 3) return false;
         }
         return true;
     }
-
-    export function find_path(start: qm.vec, end: qm.vec, geom: ql.tile_geometry, can_walk = default_walk_filter): qm.vec[]
-    {
-        let s = geom.project(start);
-        let e = geom.project(end);
-        let id = (v: qm.vec) => v.y * geom.width + v.x;
-        // let pos = n => [n % geom.width, Math.floor(n / geom.width)];
-
-        let open:  qm.vec[] = [s];
-        let visited: number[] = [id(s)];
-        let prev:  number[] = [-1];
-        // let data: {prev, dist}[] = [{prev: -1, dist: 0}];
-
-        const offsets = [qm.v(-1, 0),               qm.v(1, 0),
-                         qm.v(0, -1), qm.v(-1, -1), qm.v(1, -1),
-                         qm.v(-1, 1),               qm.v(1, 1),
-                                       qm.v(0, 1) ];
-
-        while (open.length) { 
-            let unseen = open.shift();
-            if (qm.eq(unseen, e)) break;
-
-            for (let off of offsets)
-            {
-                let n_loc = qm.add(unseen, off);
-
-                if (can_walk(geom, unseen, n_loc)) {
-                    let n_id = id(n_loc);
-                    if (!qu.contains(visited, n_id)) {
-                        open.push(n_loc);
-                        visited.push(n_id);
-                        prev.push(id(unseen));
-                    }
-                }
-            }
-        }
-
-        let id_to_loc = (id: number) => {
-            return qm.scale(qm.v(id % geom.width + 0.5, Math.floor(id / geom.width) + 0.5), geom.tile_size);
-        }
-
-        let path: qm.vec[] = [id_to_loc(id(e))];
-        for (let idx = visited.indexOf(id(e)); idx != -1;) {
-            let tile_id = prev[idx];
-            if (tile_id == -1) {
-                break;
-            } 
-
-            path.unshift(id_to_loc(tile_id));
-            idx = visited.indexOf(tile_id);
-        }
-
-        // paths.push(path);
-        return path.length > 1 ? path : undefined;
-    }
-
 
     export class ai_movement extends qc.character_movement
     {
@@ -1042,9 +1048,10 @@ namespace qi
             let start = this.root.pos;
 
             // debug
-            qi.paths = [];
+            qi.g_paths = [];
 
-            let path = qi.find_path(start, this.target.root.pos, this.getworld().geometry);
+            let g = this.owner.world.geometry as ql.tile_geometry;
+            let path = g.find_path(this.root.pos, this.target.root.pos, default_walk_filter);
             if (path) {
                 dir = qm.sign(qm.sub(path[1], path[0]));
             }
@@ -1068,7 +1075,8 @@ namespace qi
         }
 
         public tick(delta: number) {
-            let path = qi.find_path(this.root.pos, this.target.root.pos, this.getworld().geometry);
+            let g = this.owner.world.geometry as ql.tile_geometry;
+            let path = g.find_path(this.root.pos, this.target.root.pos, default_walk_filter);
             if (path) {
                 this.mov.input = qm.scale(qm.sign(qm.sub(path[1], path[0])), qm.rnd(0.5, 1));
             }
@@ -1271,7 +1279,7 @@ namespace qg
             }
 
             ctx.strokeStyle = 'green';
-            for (let path of qi.paths) {
+            for (let path of qi.g_paths) {
                 if (path.length == 0) continue;
                 ctx.beginPath();
                 ctx.moveTo(path[0].x, path[0].y);
