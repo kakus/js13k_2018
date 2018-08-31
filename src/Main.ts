@@ -352,7 +352,11 @@ namespace qf
         public components: component_base[] = [];
         public root: prmitive_component;
 
-        public destory() { 
+        public is_valid(): boolean {
+            return !!this.world;
+        }
+
+        public destroy() { 
             this.world.destroy_actor(this); 
         }
 
@@ -482,9 +486,23 @@ namespace qf
             public owner: timer,
             public type: timer_type,
             public delay: number,
-            public fn: Function
+            public fn: Function,
+            public actor?: qf.actor
         ) { 
             this.fire_in = delay;
+        }
+
+        public execute() {
+            if (this.is_valid()) {
+                this.fn.call(this.actor);
+            }
+        }
+
+        public is_valid() {
+            if (this.actor) {
+                return this.actor.is_valid();
+            }
+            return true;
         }
 
         public reset() { 
@@ -504,23 +522,23 @@ namespace qf
 
                 e.fire_in -= delta;
                 if (e.fire_in <= 0) {
-                    e.fn();
+                    e.execute();
                     if (e.type == timer_type.once) this.events.splice(i, 1);
                     if (e.type == timer_type.repeat) e.reset();
                 }
             }
         }
 
-        public delay(delay: number, fn: Function): timer_event
+        public delay(delay: number, fn: Function, actor?: qf.actor): timer_event
         {
-            let e = new timer_event(this, timer_type.once, delay, fn);
+            let e = new timer_event(this, timer_type.once, delay, fn, actor);
             this.events.push(e);
             return e;
         }
 
-        public every(timespan: number, fn: Function): timer_event
+        public every(timespan: number, fn: Function, actor?: qf.actor): timer_event
         {
-            let e = new timer_event(this, timer_type.repeat, timespan, fn);
+            let e = new timer_event(this, timer_type.repeat, timespan, fn, actor);
             this.events.push(e);
             return e;
         }
@@ -1114,8 +1132,8 @@ namespace qi
             this.mov.bounce_off_wall = true;
 
             this.getworld().timer.delay(qm.rnd(), _ => {
-                this.getworld().timer.every(qm.rnd(2.6, 3), this.do_jump.bind(this));
-            });
+                this.getworld().timer.every(qm.rnd(2.6, 3), this.do_jump.bind(this), this.owner);
+            }, this.owner);
         }
 
         public do_jump(): void
@@ -1130,13 +1148,16 @@ namespace qi
             let g = this.owner.world.geometry as ql.tile_geometry;
             let path = g.find_path(this.root.pos, this.target.root.pos, default_walk_filter);
             if (path) {
-                dir = qm.sign(qm.sub(path[1], path[0]));
+                for (let i = 1; i < path.length; ++i) {
+                    dir = qm.sign(qm.sub(path[i], path[i - 1]));
+                    if (dir.x != 0) break;
+                }
             }
 
-            let jump = qm.scale(qm.v(300 * dir.x, -300), qm.rnd(0.8, 1));
+            let jump = qm.scale(qm.v(300 * dir.x, -300), qm.rnd(0.5, 1));
 
             let hit = w.sweep_aabb(start, qm.add(start, qm.v(20 * dir.x, -20)), this.root.bounds, qf.cc.geom);
-            this.mov.vel = hit ? qm.mul(jump, qm.v(0.2, 1)) : jump;
+            this.mov.vel = hit ? qm.mul(jump, qm.v(0.2, 1.5)) : jump;
         }
     }
 
@@ -1270,8 +1291,14 @@ namespace qg
                 this.vel = qm.v();
                 this.acc = qm.v();
                 r.pos = hit_result.pos;
-                setTimeout( _ => this.owner.destory(), 1000);
-                this.tick = undefined;
+                // setTimeout( _ => this.owner.destory(), 1000);
+                if (hit_result.actor)
+                    // (<qf.rect_primitve>r).fill_color = 'red';
+                    hit_result.actor.destroy();
+                // this.tick = undefined;
+
+                this.owner.destroy();
+            
             }
             else
             {
@@ -1443,7 +1470,7 @@ namespace qg
             for (let char of line)
             {
                 if (char === '#') geom.set_blocking(x, y, true);
-                if (char === 's') qi.spawn_slime(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
+                if (char === 's') for(let i=0;i<3;++i) qi.spawn_slime(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
                 if (char === 'h') qi.spawn_humanoid(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
                 x += 1;
             }
@@ -1495,7 +1522,7 @@ namespace qg
 #                                      #
 #                                      #
 #      ######                          #
-#                                      #
+#                      s        h      #
 #                    ####      ###     #
 #                                      #
 #                                      #
