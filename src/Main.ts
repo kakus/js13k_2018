@@ -837,21 +837,14 @@ namespace qc {
             let r = this.owner.root;
             let g = this.owner.world.geometry as ql.tile_geometry;
 
-            let left = qm.scale(qm.left, r.bounds.x * 0.5 + dist);
-            let right = qm.scale(qm.right, r.bounds.x * 0.5 + dist);
-
-            let trace = g.line_trace2(r.pos, qm.add(r.pos, left));
-            return trace ? trace : g.line_trace2(r.pos, qm.add(r.pos, right));
+            let trace = g.sweep_aabb(r.pos, qm.add(r.pos, qm.scale(qm.left, dist)), r.bounds);
+            return trace ? trace : g.sweep_aabb(r.pos, qm.add(r.pos, qm.scale(qm.right, dist)), r.bounds);
         }
 
         public trace_ground(): qm.hit_result {
-            let a = this.owner;
-            let r = a.root;
-            let w = a.world;
-            let g = w.geometry as ql.tile_geometry;
-
-            let down = qm.scale(qm.down, r.bounds.y + 1)
-            return g.line_trace2(r.pos, qm.add(r.pos, down));
+            let r = this.owner.root;
+            let g = this.owner.world.geometry as ql.tile_geometry;
+            return g.sweep_aabb(r.pos, qm.add(r.pos, qm.down), r.bounds);
         }
 
         public tick(delta: number) {
@@ -969,7 +962,7 @@ namespace qi
             idx = visited.indexOf(tile_id);
         }
 
-        paths.push(path);
+        // paths.push(path);
         return path.length > 1 ? path : undefined;
     }
 
@@ -1069,12 +1062,14 @@ namespace qi
         public init() {
             super.init()
             this.mov = this.owner.getcmp(qi.ai_movement)[0];
+            // this.getworld().timer.delay(qm.rnd(0, 1), _ => {
+            //     this.getworld().timer.every(0.1, this.btick.bind(this))
+            // });
         }
 
         public tick(delta: number) {
             let path = qi.find_path(this.root.pos, this.target.root.pos, this.getworld().geometry);
             if (path) {
-                // let dist = qm.mag(qm.sub(this.target.root.pos, this.root.pos));
                 this.mov.input = qm.scale(qm.sign(qm.sub(path[1], path[0])), qm.rnd(0.5, 1));
             }
             else {
@@ -1374,7 +1369,7 @@ namespace qg
             {
                 if (char === '#') geom.set_blocking(x, y, true);
                 if (char === 's') qi.spawn_slime(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
-                if (char === 's') qi.spawn_humanoid(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
+                if (char === 'h') qi.spawn_humanoid(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
                 x += 1;
             }
             y += 1;
@@ -1431,10 +1426,10 @@ namespace qg
 #                                      #
 #                                      #
 #                                      #
-#                                      #
+#                   h                  #
 #             ####  ######    #####    #
 #    ### ######                        #
-#h                                   s #
+#                                    s #
 ########################################`
                     , world)
 
