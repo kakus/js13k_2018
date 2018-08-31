@@ -39,6 +39,7 @@ namespace qm
                m > max ? scale(unit(a), max) :
                          a;
     }
+    export function manhattan_dist(a: vec) { return Math.abs(a.x) + Math.abs(a.y); }
 
     // general math
     export function clamp(x: number, min: number, max: number) { return Math.max(Math.min(x, max), min); }
@@ -550,13 +551,15 @@ namespace ql
 {
     const tile_offsets = [
         qm.v(-1, -1), qm.v(0, -1), qm.v(1, -1),
-        qm.v(-1,  0),              qm.v(1,  0),
-        qm.v(-1,  1), qm.v(0,  1), qm.v(1,  1)];
+        qm.v(-1,  0),              qm.v(1,  0)];
+        // qm.v(-1,  1), qm.v(0,  1), qm.v(1,  1)];
 
     export class tile_geometry
     {
-        public tile_map: boolean[][] = [];
+        //public blocking_tiles: boolean[][] = [];
         public blocking_dist: number[][] = [];
+        public floor_dist: number[][] = [];
+        public jump_dist: number[][] = [];
 
         // debug
         public d_considered: qm.vec[] = [];
@@ -570,30 +573,40 @@ namespace ql
             qu.assert(width > 0 && height > 0);
 
             for (let i = 0; i < height; ++i) {
-                this.tile_map[i] = new Array(width).fill(false);
+                // this.blocking_tiles[i] = new Array(width).fill(false);
                 this.blocking_dist[i] = new Array(width).fill(99);
+                this.floor_dist[i] = new Array(width).fill(99);
+                this.jump_dist[i] = new Array(width).fill(99);
             }
         }
 
         public set_blocking(x: number, y: number, blocking: boolean): void
         {
-            // currently only support this;
+            // currently only support add blocking;
             qu.assert(blocking === true);
-            if (this.is_valid({x, y})) 
+            let node = qm.v(x, y);
+            if (this.is_valid(node)) 
             {
-                this.tile_map[y][x] = blocking;
-                this.update_blocking_dist(qm.v(x, y), 0);
+                // this.blocking_tiles[y][x] = blocking;
+                this.update_blocking_dist(node, 0);
+                this.update_floor_dist(node);
+                this.update_jump_dist(node, 5);
             }
             else {
                 qu.assert(false, `${x} != [0, ${this.width}) || ${y} != [0, ${this.height})`);
             }
         }
         
-        public get_blocking_distance(n: qm.vec): number {
-            if (this.is_valid(n)) {
-                return this.blocking_dist[n.y][n.x];
-            }
-            return Number.MAX_VALUE;
+        public get_blocking_dist(n: qm.vec): number {
+            return this.is_valid(n) ? this.blocking_dist[n.y][n.x] : Number.MAX_VALUE;
+        }
+
+        public get_floor_dist(n: qm.vec): number {
+            return this.is_valid(n) ? this.floor_dist[n.y][n.x] : Number.MAX_VALUE;
+        }
+
+        public get_jump_dist(n: qm.vec): number {
+            return this.is_valid(n) ? this.jump_dist[n.y][n.x] : Number.MAX_VALUE;
         }
 
         public is_valid(loc: qm.vec): boolean {
@@ -619,11 +632,33 @@ namespace ql
             }
         }
 
-        public is_blocking(x: number, y: number): boolean
-        {
-            if (x >= 0 && x < this.width && y >= 0 && y < this.height) 
-            {
-                return this.tile_map[y][x];
+        protected update_floor_dist(loc: qm.vec): void {
+            for (let pos = qm.vc(loc), dist = 0; pos.y >= 0; --pos.y, ++dist) {
+                if (this.floor_dist[pos.y][pos.x] < dist) {
+                    break;
+                }
+               this.floor_dist[pos.y][pos.x] = dist;
+            }
+        }
+
+        protected update_jump_dist(root: qm.vec, range: number): void {
+            this.jump_dist[root.y][root.x] = 0;
+            for (let y = root.y - 1; y >= root.y - range; --y) {
+                for (let x = root.x - range; x < root.x + range; ++x) {
+                    let n = qm.v(x, y);
+                    if (this.is_valid(n)) {
+                        let dist = qm.manhattan_dist(qm.sub(n, root));
+                        if (this.jump_dist[n.y][n.x] > dist) {
+                            this.jump_dist[n.y][n.x] = dist;
+                        }
+                    }
+                }
+            }
+        }
+
+        public is_blocking(x: number, y: number): boolean {
+            if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
+                return this.blocking_dist[y][x] === 0;
             }
             return false;
         }
@@ -863,9 +898,23 @@ namespace qi
 
     export type path_filter = (geom: ql.tile_geometry, s: qm.vec, e: qm.vec) => boolean;
     export function default_walk_filter(geom: ql.tile_geometry, s: qm.vec, e: qm.vec): boolean {
-        if (geom.is_blocking(e.x, e.y)) return false;
-        if (geom.get_blocking_distance(e) > 2) return false;
 
+        if (geom.is_blocking(e.x, e.y)) {
+            return false;
+        }
+
+        let dir = qm.sub(e, s);
+        let e_floor = geom.get_floor_dist(e);
+
+        if (dir.y == 0 && e_floor > 1) return false;
+
+        let e_dist = geom.get_blocking_dist(e);
+        let s_jump = geom.get_jump_dist(s);
+
+        if (dir.y < 0) {
+            if (dir.x == 0 && e_dist > 1) return false;
+            if (dir.x != 0 && s_jump > 3) return false;
+        }
         return true;
     }
 
@@ -882,7 +931,7 @@ namespace qi
         // let data: {prev, dist}[] = [{prev: -1, dist: 0}];
 
         const offsets = [qm.v(-1, 0),               qm.v(1, 0),
-                         qm.v(-1, -1), qm.v(0, -1), qm.v(1, -1),
+                         qm.v(0, -1), qm.v(-1, -1), qm.v(1, -1),
                          qm.v(-1, 1),               qm.v(1, 1),
                                        qm.v(0, 1) ];
 
@@ -1164,6 +1213,9 @@ namespace qg
 
     export var g_draw_considered = false;
     export var g_draw_blocking_dist = false;
+    export var g_draw_floor_dist = false;
+    export var g_draw_jump_dist = false;
+    export var g_draw_id = false;
 
     class debug_draw_collisions extends qf.prmitive_component
     {
@@ -1193,7 +1245,24 @@ namespace qg
                         // this.tiles.line_trace_tile(pos, end, x, y);
                     }
                     if (g_draw_blocking_dist) {
+                        ctx.fillStyle = 'red';
                         ctx.fillText(this.tiles.blocking_dist[y][x].toFixed(0), x * tl, (y + 1) * tl);
+                    }
+
+                    if (g_draw_floor_dist) {
+                        ctx.fillStyle = 'green';
+                        ctx.fillText(this.tiles.floor_dist[y][x].toFixed(0), (x + 0.5) * tl, (y + 1) * tl);
+                    }
+
+                    if (g_draw_jump_dist) {
+                        ctx.fillStyle = 'pink';
+                        ctx.fillText(this.tiles.jump_dist[y][x].toFixed(0), (x) * tl, (y + 0.5) * tl);
+                    }
+
+                    if (g_draw_id) {
+                        ctx.fillStyle = 'red';
+                        ctx.fillText(x.toFixed(0), (x) * tl, (y + 0.5) * tl);
+                        ctx.fillText(y.toFixed(0), (x + 0.5) * tl, (y + 1) * tl);
                     }
                 }
             }
@@ -1318,7 +1387,7 @@ namespace qg
     function tick()
     {
         world.tick(1/60);
-        ctx.clearRect(0, 0, 320, 320);
+        ctx.clearRect(0, 0, 640, 320);
         qr.render_w(ctx, world);
         window.requestAnimationFrame(tick);
     }
@@ -1328,7 +1397,7 @@ namespace qg
         let canvas: HTMLCanvasElement = document.querySelector("#canvas");
         ctx = canvas.getContext("2d");
         ctx.translate(10.5, 10.5);
-        let t = new ql.tile_geometry(21, 21, 14);
+        let t = new ql.tile_geometry(40, 20, 14);
 
         world = new game_world();
         world.geometry = t;
@@ -1347,27 +1416,26 @@ namespace qg
         world.player = player;
 
         parse_level(
-`####################
-#                  #
-#                  #
-#              s   #
-#   ####      ###  #
-#      #      #    #
-#      #      #    #
-#      #      #    #
-#      #      #    #
-#      #      #    #
-#      #      #    #
-#                  #
-#                  #
-#       h          #
-#       ###        #
-#                  #
-#                  #
-#           ####   #
-#           #      #
-#           #      #
-####################`
+`########################################
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#      ######                          #
+#                                      #
+#                    ####      ###     #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#             ####  ######    #####    #
+#    ### ######                        #
+#h                                   s #
+########################################`
                     , world)
 
         qs.input.init(canvas);
