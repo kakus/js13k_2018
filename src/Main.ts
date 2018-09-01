@@ -32,6 +32,7 @@ namespace qm
     export function add(a: vec, b: vec) { return v(a.x + b.x, a.y + b.y); }
     export function sub(a: vec, b: vec) { return v(a.x - b.x, a.y - b.y); }
     export function mul(a: vec, b: vec) { return v(a.x * b.x, a.y * b.y); }
+    export function dot(a: vec, b: vec) { return a.x * b.x + a.y * b.y; }
     export function scale(a: vec, s: number) { return v(a.x * s, a.y * s); }
     export function cross(a: vec, b: vec) { return a.x * b.y - a.y * b.x; }
     export function sign(a: vec) { return v(Math.sign(a.x), Math.sign(a.y)); }
@@ -65,7 +66,7 @@ namespace qm
 
     export function overlap_point(a: qm.vec, [c, ext]: qm.aabb): boolean {
         let d = qm.sub(a, c);
-        return Math.abs(d.x) <= ext.x && Math.abs(d.y) <= ext.y;
+        return Math.abs(d.x) < ext.x && Math.abs(d.y) < ext.y;
     }
     export function overlap_aabb([ac, aext]: aabb, [bc, bext]: aabb): boolean {
         return qm.overlap_point(ac, [bc, qm.add(aext, bext)]);
@@ -103,7 +104,7 @@ namespace qm
                     // we can only colide against horizontal line
                     if (i == 0 || i == 2)
                     {
-                        if (start.x >= Math.min(v1.x, v2.x) && start.x <= Math.max(v1.x, v2.x))
+                        if (start.x > Math.min(v1.x, v2.x) && start.x < Math.max(v1.x, v2.x))
                         {
                             hits[i] = qm.v(start.x, v1.y);
                         }
@@ -123,7 +124,7 @@ namespace qm
                     let y = v1.y;
                     let x = (y - b) / a;
                     
-                    if (x >= Math.min(v1.x, v2.x) && x <= Math.max(v1.x, v2.x))
+                    if (x > Math.min(v1.x, v2.x) && x < Math.max(v1.x, v2.x))
                     {
                         hits[i] = qm.v(x, y);
                     }
@@ -134,7 +135,7 @@ namespace qm
                     let x = v1.x;
                     let y = a * x + b;
 
-                    if (y >= Math.min(v1.y, v2.y) && y <= Math.max(v1.y, v2.y))
+                    if (y > Math.min(v1.y, v2.y) && y < Math.max(v1.y, v2.y))
                     {
                         hits[i] = qm.v(x, y);
                     }
@@ -294,7 +295,7 @@ namespace qf
     export abstract class component_base
     {
         public owner: actor;
-        public init(): void { }
+        public begin_play(): void { }
         public getworld() { return this.owner.world; }
     }
 
@@ -373,7 +374,9 @@ namespace qf
     {
         cmp.owner = owner;
         owner.components.push(cmp);
-        cmp.init();
+        if (owner.world.has_begun_play) {
+            cmp.begin_play();
+        }
         return cmp;
     }
 
@@ -396,14 +399,13 @@ namespace qf
         return attach_prim(owner, r, {x, y, width, height, root});
     }
 
-
-
     export class world
     {
         public actors: actor[] = [];
         public geometry: ql.tile_geometry;
         public player: actor;
         public timer = new timer();
+        public has_begun_play = false;
 
         public tick(delta: number)
         {
@@ -414,6 +416,7 @@ namespace qf
                 for (let cmp of actor.components)
                 {
                     if (qu.has_method(cmp, 'tick'))
+                    // if (!(cmp instanceof qf.prmitive_component || cmp instanceof qi.slime_ai))
                     {
                         cmp.tick(delta);
                     }
@@ -436,7 +439,7 @@ namespace qf
             actor.world = undefined;
         }
 
-        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec, channel = qf.cc.all): qf.hit_result {
+        public sweep_aabb(start: qm.vec, end: qm.vec, size: qm.vec, channel = qf.cc.all, ignore?: qf.actor[]): qf.hit_result {
             const area = qm.make_aabb(start, end);
             const half_size = qm.scale(size, 0.5);
 
@@ -454,6 +457,9 @@ namespace qf
             }
 
             for (let actor of this.actors) {
+                if (ignore && qu.contains(ignore, actor)) {
+                    continue;
+                }
                 if (actor.root) {
                     let actor_aabb = actor.root.get_aabb(half_size);
                     if (qm.overlap_aabb(area, actor_aabb) && (actor.root.collision_mask & channel)) {
@@ -469,7 +475,7 @@ namespace qf
 
             return qu.upper_bound(hits, (a, b) => {
                 return qm.mag_sqr(qm.sub(a.pos, start)) > qm.mag_sqr(qm.sub(b.pos, start));
-            })
+            });
         }
     }
 
@@ -548,6 +554,17 @@ namespace qf
 // render
 namespace qr
 {
+    export class sprite_data {
+        constructor(
+            public readonly image: HTMLImageElement,
+            public readonly position: qm.vec,
+            public readonly size: qm.vec
+        ) { }
+
+        public is_valid() {
+            return this.image && this.image.complete && this.image.naturalHeight !== 0;
+        }
+    }
     export function render_w(ctx: CanvasRenderingContext2D, world: qf.world)
     {
         render_a(ctx, world.actors);
@@ -871,6 +888,7 @@ namespace ql
             const ts = this.tile_size;
             const half_ts = qm.scale(qm.v(ts, ts), 0.5);
             const half_size = qm.scale(size, 0.5);
+            const dir = qm.sub(end, start);
 
             let hit_result: qm.line_trace_result;
 
@@ -882,13 +900,29 @@ namespace ql
                 {
                     for (let ix = x - ext.x; ix <= x + ext.x; ++ix)
                     {
+                        let tile_center = qm.scale(qm.v(ix + 0.5, iy + 0.5), ts);
+                        let tile_dir = qm.sub(tile_center, start);
+
+                        if (qm.dot(dir, tile_dir) < 0) {
+                            continue;
+                        }
+
                         if (this.d_considered)
                             this.d_considered.push(qm.scale(qm.v(ix, iy), ts));
 
                         if (this.is_blocking(ix, iy))
                         {
-                            let tile_center = qm.scale(qm.v(ix + 0.5, iy + 0.5), ts);
-                            let hit = qm.line_trace_aabb(start, end, [tile_center, qm.add(half_size, half_ts)]);
+                            let tile_aabb: qm.aabb = [tile_center, qm.add(half_size, half_ts)];
+
+                            if (qm.overlap_point(start, tile_aabb)) {
+                                let d = qm.sub(start, end);
+                                let hit = qm.line_trace_aabb(qm.add(start, qm.scale(d, 999)), start, tile_aabb);
+                                qu.assert(!!hit);
+                                hits.push(hit);
+                                continue;
+                            }
+
+                            let hit = qm.line_trace_aabb(start, end, tile_aabb);
                             if (hit)
                             {
                                 this.d_hits.push(hit);
@@ -921,7 +955,6 @@ namespace ql
             let s = this.project(start);
             let e = this.project(end);
             let id = (v: qm.vec) => v.y * this.width + v.x;
-
             let open: qm.vec[] = [s];
             let visited: number[] = [id(s)];
             let prev: number[] = [-1];
@@ -932,6 +965,10 @@ namespace ql
 
                 for (let offset of c_breadth_search_offsets) {
                     let n_loc = qm.add(start, offset);
+
+                    if (!this.is_valid(n_loc)) {
+                        continue;
+                    }
 
                     if (is_conn_allowed(this, start, n_loc)) {
                         let n_id = id(n_loc);
@@ -1018,23 +1055,53 @@ namespace qc {
             if (trace) {
                 let [p, n] = trace;
                 this.last_hit = trace;
-                r.pos.x = p.x + n.x;
-                r.pos.y = p.y + n.y;
 
                 if (n.y != 0) {
+                    end.y = p.y
+                    if (end.x != p.x) {
+                        let x_trace = g.sweep_aabb(p, end, r.bounds);
+                        if (x_trace) {
+                            end.x = x_trace[0].x;
+                        }
+                    }
                     this.vel.y = 0;
                 }
                 if (n.x != 0) {
+                    end.x = p.x
+                    if (end.y != p.y) {
+                        let y_trace = g.sweep_aabb(p, end, r.bounds);
+                        if (y_trace) {
+                            end.y = y_trace[0].y;
+                        }
+                    }
+
                     this.vel.x *= this.bounce_off_wall ? -qm.rnd(0.9, 1) : 0;
                 }
             }
-            else {
+            // else {
+                // r.pos.x = Math.round(end.x);
                 r.pos.x = end.x;
-                r.pos.y = Math.floor(end.y);
+                r.pos.y = end.y;
                 // r.pos = end;
-            }
+            // }
 
             this.on_ground = !!this.trace_ground();
+        }
+    }
+
+    export class spirte_prim extends qf.prmitive_component {
+        public sprite: qr.sprite_data;
+        public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
+            const sp = this.sprite.position,
+                  ss = this.sprite.size;
+
+            if (this.sprite.is_valid()) {
+                ctx.drawImage(this.sprite.image, sp.x, sp.y, ss.x, ss.y,
+                    -ss.x / 2, -ss.y / 2, ss.x, ss.y);
+            } else {
+                ctx.fillStyle = 'red';
+                ctx.fillRect(-ss.x/2,  -ss.y/2, ss.x, ss.y);
+            }
         }
     }
 }
@@ -1045,6 +1112,8 @@ namespace qi
     export var g_paths: qm.vec[][] = [];
 
     export function default_walk_filter(geom: ql.tile_geometry, s: qm.vec, e: qm.vec): boolean {
+        if (geom.is_blocking(s.x, s.y)) return false;
+
         let e_dist = geom.get_blocking_dist(e);
 
         // end is blocking tile
@@ -1113,9 +1182,9 @@ namespace qi
         public target: qf.actor;
         public root: qf.prmitive_component;
 
-        public init()
+        public begin_play()
         {
-            super.init();
+            super.begin_play();
             this.target = this.owner.world.player;
             this.root = this.owner.root;
         }
@@ -1125,9 +1194,9 @@ namespace qi
     {
         public mov: qc.character_movement;
 
-        public init()
+        public begin_play()
         {
-            super.init();
+            super.begin_play();
             [this.mov] = this.owner.getcmp(qc.character_movement);
             this.mov.bounce_off_wall = true;
 
@@ -1164,8 +1233,8 @@ namespace qi
     export class humanoid_ai extends enemy_controller {
         public mov: qi.ai_movement;
 
-        public init() {
-            super.init()
+        public begin_play() {
+            super.begin_play()
             this.mov = this.owner.getcmp(qi.ai_movement)[0];
             // this.getworld().timer.delay(qm.rnd(0, 1), _ => {
             //     this.getworld().timer.every(0.1, this.btick.bind(this))
@@ -1285,7 +1354,7 @@ namespace qg
             let ds = qm.scale(this.vel, delta);
             let end = qm.add(r.pos, ds);
 
-            let hit_result = w.sweep_aabb(r.pos, end, r.bounds);
+            let hit_result = w.sweep_aabb(r.pos, end, r.bounds, qf.cc.all, [w.player]);
             if (hit_result)
             {
                 this.vel = qm.v();
@@ -1295,9 +1364,9 @@ namespace qg
                 if (hit_result.actor)
                     // (<qf.rect_primitve>r).fill_color = 'red';
                     hit_result.actor.destroy();
-                // this.tick = undefined;
+                this.tick = undefined;
 
-                this.owner.destroy();
+                // this.owner.destroy();
             
             }
             else
@@ -1318,7 +1387,7 @@ namespace qg
     {
         public tiles: ql.tile_geometry;
 
-        public init()
+        public begin_play()
         {
             this.tiles = this.owner.world.geometry as ql.tile_geometry;
         }
@@ -1427,7 +1496,7 @@ namespace qg
         private z_press_start = -1;
         private last_fire_time = 0;
 
-        public init()
+        public begin_play()
         {
             this.movement = this.owner.components.find(c => c instanceof player_movement) as player_movement;
         }
@@ -1460,6 +1529,21 @@ namespace qg
         }
     }
 
+    function spawn_player(world: qf.world, {x, y}): qf.actor {
+        let a = world.spawn_actor();
+        let s = new qc.spirte_prim();
+        let i = new Image();
+        i.src = 's.png';
+        // s.scale.x *= 2;
+        // s.scale.y *= 2;
+        s.sprite = new qr.sprite_data(i, qm.zero, qm.v(14, 14));
+        qf.attach_prim(a, s, {x, y, width: 12, height: 12, coll_mask: qf.cc.pawn, root: true});
+        qf.attach_cmp(a, new player_movement());
+        qf.attach_cmp(a, new player_controller());
+        world.player = a;
+        return a;
+    }
+
     function parse_level(data: string, world: qf.world): void
     {
         let geom = world.geometry;
@@ -1469,9 +1553,11 @@ namespace qg
             x = 0;
             for (let char of line)
             {
+                let pos = qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size);
                 if (char === '#') geom.set_blocking(x, y, true);
-                if (char === 's') for(let i=0;i<3;++i) qi.spawn_slime(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
-                if (char === 'h') qi.spawn_humanoid(world, qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size));
+                if (char === '@') spawn_player(world, pos)
+                if (char === 's') qi.spawn_slime(world, pos);
+                if (char === 'h') for(let i=0;i<10;++i)qi.spawn_humanoid(world, pos);
                 x += 1;
             }
             y += 1;
@@ -1484,7 +1570,7 @@ namespace qg
     function tick()
     {
         world.tick(1/60);
-        ctx.clearRect(0, 0, 640, 320);
+        ctx.clearRect(0, 0, 410, 210);
         qr.render_w(ctx, world);
         window.requestAnimationFrame(tick);
     }
@@ -1493,24 +1579,14 @@ namespace qg
     {
         let canvas: HTMLCanvasElement = document.querySelector("#canvas");
         ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
         ctx.translate(10.5, 10.5);
-        let t = new ql.tile_geometry(40, 20, 14);
+        ctx.scale(2, 2);
+        let t = new ql.tile_geometry(40, 20, 10);
 
         world = new qf.world();
         world.geometry = t;
 
-
-
-        let player = world.spawn_actor();
-
-        let tdebug = new debug_draw_collisions();
-
-        qf.attach_rect(player, {x: 100, y: 190, width: 12, height: 12, fill: 'rgba(255, 0, 0, .5)', root: true});
-        qf.attach_cmp(player, new player_movement());
-        qf.attach_prim(player, tdebug, {x: 0, y: 0});
-        qf.attach_cmp(player, new player_controller());
-
-        world.player = player;
 
         parse_level(
 `########################################
@@ -1520,9 +1596,9 @@ namespace qg
 #                                      #
 #                                      #
 #                                      #
-#                                      #
+#        @                             #
 #      ######                          #
-#                      s        h      #
+#                      h               #
 #                    ####      ###     #
 #                                      #
 #                                      #
@@ -1531,11 +1607,20 @@ namespace qg
 #                                      #
 #             ####  ######    #####    #
 #    ### ######                        #
-#                                    s #
+#                                      #
 ########################################`
                     , world)
 
+        let tdebug = new debug_draw_collisions();
+        qf.attach_prim(world.player, tdebug, {});
+
         qs.input.init(canvas);
+
+        world.has_begun_play = true;
+        for (let a of world.actors)
+            for (let c of a.components) 
+                c.begin_play();
+
         window.requestAnimationFrame(tick);
     }
 }
