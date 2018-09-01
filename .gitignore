@@ -1,1 +1,4 @@
 bin/app.js
+.DS_Store
+bundle/
+bundle.zip

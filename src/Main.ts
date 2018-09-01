@@ -888,7 +888,7 @@ namespace ql
             const ts = this.tile_size;
             const half_ts = qm.scale(qm.v(ts, ts), 0.5);
             const half_size = qm.scale(size, 0.5);
-            const dir = qm.sub(end, start);
+            const dir = qm.unit(qm.sub(end, start));
 
             let hit_result: qm.line_trace_result;
 
@@ -896,22 +896,19 @@ namespace ql
 
                 let hits: qm.line_trace_result[] = [];
 
-                for (let iy = y - ext.y; iy <= y + ext.y; ++iy)
-                {
-                    for (let ix = x - ext.x; ix <= x + ext.x; ++ix)
-                    {
+                for (let iy = y - ext.y; iy <= y + ext.y; ++iy) {
+                    for (let ix = x - ext.x; ix <= x + ext.x; ++ix) {
                         let tile_center = qm.scale(qm.v(ix + 0.5, iy + 0.5), ts);
-                        let tile_dir = qm.sub(tile_center, start);
+                        let tile_dir = qm.unit(qm.sub(tile_center, start));
 
-                        if (qm.dot(dir, tile_dir) < 0) {
+                        if (qm.dot(dir, tile_dir) < -0.5) {
                             continue;
                         }
 
                         if (this.d_considered)
                             this.d_considered.push(qm.scale(qm.v(ix, iy), ts));
 
-                        if (this.is_blocking(ix, iy))
-                        {
+                        if (this.is_blocking(ix, iy)) {
                             let tile_aabb: qm.aabb = [tile_center, qm.add(half_size, half_ts)];
 
                             if (qm.overlap_point(start, tile_aabb)) {
@@ -923,8 +920,7 @@ namespace ql
                             }
 
                             let hit = qm.line_trace_aabb(start, end, tile_aabb);
-                            if (hit)
-                            {
+                            if (hit) {
                                 this.d_hits.push(hit);
                                 hits.push(hit);
                             }
@@ -1557,7 +1553,7 @@ namespace qg
                 if (char === '#') geom.set_blocking(x, y, true);
                 if (char === '@') spawn_player(world, pos)
                 if (char === 's') qi.spawn_slime(world, pos);
-                if (char === 'h') for(let i=0;i<10;++i)qi.spawn_humanoid(world, pos);
+                if (char === 'h') for(let i=0;i<50;++i)qi.spawn_humanoid(world, pos);
                 x += 1;
             }
             y += 1;
