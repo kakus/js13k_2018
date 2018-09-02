@@ -50,6 +50,7 @@ namespace qm
 
     // general math
     export function clamp(x: number, min: number, max: number) { return Math.max(Math.min(x, max), min); }
+    export function eq_eps(a: number, b: number, eps = 0.01) { return Math.abs(a - b) < eps; }
     export function rnd(min = 0, max = 1) { return min + (max - min) * Math.random(); }
 
     export type aabb = [vec, vec];
@@ -295,24 +296,34 @@ namespace qf
     export abstract class component_base
     {
         public owner: actor;
+        public name = '';
         public begin_play(): void { }
         public getworld() { return this.owner.world; }
     }
 
-    export abstract class prmitive_component extends component_base
+    export abstract class scene_component extends component_base
     {
         public pos: qm.vec = qm.v(0, 0);
         public scale: qm.vec = qm.v(1, 1);
         public rot: number = 0;
-        public parent: prmitive_component;
+        public parent: scene_component;
         public bounds: qm.vec = qm.v(0, 0);
         public collision_mask = cc.none;
 
         public render_c2d(ctx: CanvasRenderingContext2D): void
         {
+            let pos = this.pos;
+            let scale = this.scale;
+
+            if (this.parent) {
+                let t = this.get_world_transform();
+                pos = qm.transform(qm.zero, t);
+                scale = qm.sub(qm.transform(qm.one, t), pos);
+            }
+
             ctx.save();
-            ctx.translate(this.pos.x, this.pos.y);
-            ctx.scale(this.scale.x, this.scale.y);
+            ctx.translate(pos.x, pos.y);
+            ctx.scale(scale.x, scale.y);
             if (this.rot != 0) {
                 ctx.rotate(this.rot);
             }
@@ -337,7 +348,7 @@ namespace qf
         public abstract render_c2d_impl(ctx: CanvasRenderingContext2D): void;
     }
 
-    export class rect_primitve extends prmitive_component
+    export class rect_primitve extends scene_component
     {
         public fill_color: any;
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void
@@ -351,7 +362,7 @@ namespace qf
     {
         public world: world;
         public components: component_base[] = [];
-        public root: prmitive_component;
+        public root: scene_component;
 
         public is_valid(): boolean {
             return !!this.world;
@@ -368,11 +379,16 @@ namespace qf
         public getcmp<T extends component_base>(clazz: Function & { prototype: T }): T[] {
             return this.components.filter(c => c instanceof clazz) as T[];
         }
+
+        public getcmp_byname(name: string): component_base[] {
+            return this.components.filter(c => c.name === name);
+        }
     }
 
-    export function attach_cmp<T extends component_base>(owner: actor, cmp: T): T
+    export function attach_cmp<T extends component_base>(owner: actor, cmp: T, name = ''): T
     {
         cmp.owner = owner;
+        cmp.name = name;
         owner.components.push(cmp);
         if (owner.world.has_begun_play) {
             cmp.begin_play();
@@ -380,7 +396,8 @@ namespace qf
         return cmp;
     }
 
-    export function attach_prim<T extends prmitive_component>(owner: actor, prim: T, {x = 0, y = 0, width = 10, height = 10, root = false, coll_mask = qf.cc.none}): T
+    export function attach_prim<T extends scene_component>(owner: actor, prim: T, 
+        {x = 0, y = 0, width = 10, height = 10, root = false, coll_mask = qf.cc.none, name = ''}): T
     {
         prim.pos.x = x;
         prim.pos.y = y;
@@ -389,14 +406,7 @@ namespace qf
         prim.collision_mask = coll_mask;
 
         if (root) owner.root = prim;
-        return attach_cmp(owner, prim);
-    }
-
-    export function attach_rect(owner: actor, {x = 0, y = 0, width = 10, height = 10, fill = 'red', root = false})
-    {
-        let r = new rect_primitve();
-        r.fill_color = fill;
-        return attach_prim(owner, r, {x, y, width, height, root});
+        return attach_cmp(owner, prim, name);
     }
 
     export class world
@@ -565,6 +575,65 @@ namespace qr
             return this.image && this.image.complete && this.image.naturalHeight !== 0;
         }
     }
+
+    export class spritesheet {
+        constructor(
+            public readonly image: HTMLImageElement,
+            public readonly cell_size: qm.vec,
+            public readonly grid_size: qm.vec
+        ) { }
+
+        public get_sprite(id: number): sprite_data {
+            let x = id % this.grid_size.x, y = Math.floor(id / this.grid_size.x);
+            return new sprite_data(this.image, qm.mul(qm.v(x, y), this.cell_size), this.cell_size);
+        }
+    }
+
+    export class sprite_sequence {
+        public loop: boolean = false;
+        protected elapsed = 0;
+        protected total_time = 0;
+
+        constructor(
+            public readonly spritesheet: qr.spritesheet,
+            public readonly frames: number[],
+            public durations?: number[]
+        ) { 
+            if (this.durations) {
+                qu.assert(this.frames.length == this.durations.length);
+                this.total_time = this.durations.reduce((p, c) => p + c);
+            } else {
+                this.set_duration(1); 
+            }
+        }
+
+        public set_duration(time: number): void {
+            qu.assert(time > 0);
+            this.durations = this.frames.map(_ => time / this.frames.length);
+            this.total_time = this.durations.reduce((p, c) => p + c);
+        }
+
+        public tick(delta: number): void {
+            this.elapsed += delta;
+
+            if (this.loop) {
+                if (this.elapsed > this.total_time) {
+                    this.elapsed -= this.total_time;
+                }
+            }
+        }
+
+        public get_current_frame(): sprite_data {
+            for (let i = 0, time = 0; i < this.durations.length; ++i) {
+                time += this.durations[i];
+                if (this.elapsed < time) {
+                    return this.spritesheet.get_sprite(this.frames[i]);
+                }
+            }
+
+            return this.spritesheet.get_sprite(this.frames[this.frames.length - 1]);
+        }
+    }
     export function render_w(ctx: CanvasRenderingContext2D, world: qf.world)
     {
         render_a(ctx, world.actors);
@@ -572,20 +641,20 @@ namespace qr
 
     export function render_a(ctx: CanvasRenderingContext2D, actors: qf.actor[])
     {
-        let primitives: qf.prmitive_component[] = [];
+        let primitives: qf.scene_component[] = [];
 
         for (let actor of actors)
         {
             for (let cmp of actor.components)
             {
-                if (cmp instanceof qf.prmitive_component) primitives.push(cmp);
+                if (cmp instanceof qf.scene_component) primitives.push(cmp);
             }
         }
 
         render_p(ctx, primitives);
     }
 
-    export function render_p(ctx: CanvasRenderingContext2D, prmitives: qf.prmitive_component[])
+    export function render_p(ctx: CanvasRenderingContext2D, prmitives: qf.scene_component[])
     {
         for (let prim of prmitives) 
         {
@@ -1010,7 +1079,7 @@ namespace qc {
         // any axis
         public max_velocity = 300;
         // x axis
-        public max_velocity_on_ground = 200;
+        public max_velocity_on_ground = 100;
         public gravity = 1000;
         public bounce_off_wall = false;
 
@@ -1085,11 +1154,22 @@ namespace qc {
         }
     }
 
-    export class spirte_prim extends qf.prmitive_component {
+    export class sprite_component extends qf.scene_component {
         public sprite: qr.sprite_data;
+        public flip_x = false;
+        public offset: qm.vec;
+
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
             const sp = this.sprite.position,
                   ss = this.sprite.size;
+
+            if (this.flip_x) {
+                ctx.scale(-1, 1);
+            }
+
+            if (this.offset) {
+                ctx.translate(this.offset.x, this.offset.y);
+            }
 
             if (this.sprite.is_valid()) {
                 ctx.drawImage(this.sprite.image, sp.x, sp.y, ss.x, ss.y,
@@ -1097,6 +1177,24 @@ namespace qc {
             } else {
                 ctx.fillStyle = 'red';
                 ctx.fillRect(-ss.x/2,  -ss.y/2, ss.x, ss.y);
+            }
+        }
+    }
+
+    export class anim_sprite_component extends qc.sprite_component {
+        public sequences: {[name:string]: qr.sprite_sequence} = {}
+        public current_sequence: string;
+
+        public play(name: string): void {
+            qu.assert(!!this.sequences[name]);
+            this.current_sequence = name;
+        }
+
+        public tick(delta: number): void {
+            if (this.current_sequence) {
+                let seq = this.sequences[this.current_sequence];
+                seq.tick(delta);
+                this.sprite = seq.get_current_frame();
             }
         }
     }
@@ -1176,7 +1274,7 @@ namespace qi
     export class enemy_controller extends qf.component_base
     {
         public target: qf.actor;
-        public root: qf.prmitive_component;
+        public root: qf.scene_component;
 
         public begin_play()
         {
@@ -1273,6 +1371,10 @@ namespace qi
 
 namespace qg
 {
+    export const g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
+    export const g_character_spritesheet = new qr.spritesheet(g_spritesheet_image, qm.v(14, 18), qm.v(4, 4));
+    export const g_tile_spritesheet = new qr.spritesheet(g_spritesheet_image, qm.v(10, 10), qm.v(10, 10));
+
     class player_movement extends qc.character_movement
     {
         public process_input() {
@@ -1340,6 +1442,13 @@ namespace qg
     {
         public acc = qm.v(0, 1000);
         public vel = qm.v();
+        public lifespan = 0;
+
+        public begin_play() {
+            if (this.lifespan > 0) {
+                this.getworld().timer.delay(this.lifespan, _ => this.owner.destroy(), this.owner);
+            }
+        }
 
         public tick(delta: number): void
         {
@@ -1378,8 +1487,9 @@ namespace qg
     export var g_draw_floor_dist = false;
     export var g_draw_jump_dist = false;
     export var g_draw_id = false;
+    export var g_draw_bounds = false;
 
-    class debug_draw_collisions extends qf.prmitive_component
+    class debug_draw_collisions extends qf.scene_component
     {
         public tiles: ql.tile_geometry;
 
@@ -1402,9 +1512,11 @@ namespace qg
 
             for (let x = 0; x < this.tiles.width; ++x) {
                 for (let y = 0; y < this.tiles.height; ++y) {
-                    if (this.tiles.is_blocking(x, y)) {
-                        ctx.strokeRect(x * tl, y * tl, tl, tl);
-                        // this.tiles.line_trace_tile(pos, end, x, y);
+                    if (g_draw_bounds) {
+                        if (this.tiles.is_blocking(x, y)) {
+                            ctx.strokeRect(x * tl, y * tl, tl, tl);
+                            // this.tiles.line_trace_tile(pos, end, x, y);
+                        }
                     }
                     if (g_draw_blocking_dist) {
                         ctx.fillStyle = 'red';
@@ -1429,11 +1541,13 @@ namespace qg
                 }
             }
 
-            ctx.strokeStyle = 'pink';
-            for (let act of this.owner.world.actors) {
-                for (let p of act.getcmp(qf.prmitive_component)) {
-                    let h = qm.scale(p.bounds, 0.5);
-                    ctx.strokeRect(p.pos.x - h.x, p.pos.y - h.y, h.x * 2, h.y * 2);
+            if (g_draw_bounds) {
+                ctx.strokeStyle = 'pink';
+                for (let act of this.owner.world.actors) {
+                    for (let p of act.getcmp(qf.scene_component)) {
+                        let h = qm.scale(p.bounds, 0.5);
+                        ctx.strokeRect(p.pos.x - h.x, p.pos.y - h.y, h.x * 2, h.y * 2);
+                    }
                 }
             }
 
@@ -1471,7 +1585,8 @@ namespace qg
         }
     }
 
-    function spawn_projectile(world: qf.world, loc: qm.vec, dir: qm.vec): qf.actor
+    function spawn_projectile(world: qf.world, loc: qm.vec, dir: qm.vec, 
+        {lifespan = 0, gravity = 1000}): qf.actor
     {
         let a = world.spawn_actor();
 
@@ -1480,8 +1595,11 @@ namespace qg
         r.bounds = qm.v(10, 3);
         r.fill_color = 'rgba(0, 255, 0, 0.7)';
 
-        let p = qf.attach_cmp(a, new projectile_movement());
+        let p = new projectile_movement();
         p.vel = dir;
+        p.acc.y = gravity;
+        p.lifespan = lifespan;
+        qf.attach_cmp(a, p);
 
         return a;
     }
@@ -1489,17 +1607,40 @@ namespace qg
     class player_controller extends qf.component_base
     {
         private movement: player_movement;
+        private sprite: qc.anim_sprite_component;
+        private weapon_sprite: qc.sprite_component;
         private z_press_start = -1;
         private last_fire_time = 0;
 
         public begin_play()
         {
-            this.movement = this.owner.components.find(c => c instanceof player_movement) as player_movement;
+            [this.movement] = this.owner.getcmp(player_movement);
+            [this.sprite]   = this.owner.getcmp(qc.anim_sprite_component);
+            [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite') as qc.sprite_component[];
         }
 
         public tick(delta: number): void
         {
             let a = this.owner;
+
+            this.sprite.flip_x = !this.movement.moving_left;
+            this.weapon_sprite.pos.x = this.movement.moving_left ? -10 : 10;
+            this.weapon_sprite.flip_x = !this.movement.moving_left;
+            let vel = this.movement.vel;
+
+            if (this.movement.on_ground) {
+                if (qm.eq_eps(vel.x, 0, 3)) {
+                    this.sprite.play('idle');
+                } else {
+                    this.sprite.play('walk');
+                }
+            } else {
+                this.sprite.play('jump');
+                // this.sprite.play(vel.y > 50 ? 'jump' : 'jump');
+                // this.sprite.scale.x = vel.y < -220 ? 1 - Math.abs(vel.y / 1000) : 1;
+            }
+
+
             let z_state = qs.input.keyboard.get_state('z');
             if (z_state.is_down)
             {
@@ -1516,10 +1657,11 @@ namespace qg
                     this.z_press_start = 0;
 
                     let ampl = qm.clamp(press_time / 100, 1, 10);
-                    spawn_projectile(a.world, a.root.pos,
-                        qm.clamp_mag(qm.add(
+                    let dir = qm.clamp_mag(qm.add(
                             qm.scale(this.movement.moving_left ? qm.left : qm.right, 100 * ampl),
-                            qm.v(0, -200)), 0, 800));
+                            qm.v(0, 0)), 0, 800);
+
+                    spawn_projectile(a.world, a.root.pos, dir, {lifespan: 0.6, gravity: 0});
                 }
             }
         }
@@ -1527,33 +1669,57 @@ namespace qg
 
     function spawn_player(world: qf.world, {x, y}): qf.actor {
         let a = world.spawn_actor();
-        let s = new qc.spirte_prim();
-        let i = new Image();
-        i.src = 's.png';
-        // s.scale.x *= 2;
-        // s.scale.y *= 2;
-        s.sprite = new qr.sprite_data(i, qm.zero, qm.v(14, 14));
-        qf.attach_prim(a, s, {x, y, width: 12, height: 12, coll_mask: qf.cc.pawn, root: true});
+        let s = new qc.anim_sprite_component();
+
+        let idle = s.sequences['idle'] = new qr.sprite_sequence(g_character_spritesheet, [0, 1]);
+        idle.loop = true;
+
+        s.sequences['jump'] = new qr.sprite_sequence(g_character_spritesheet, [4]);
+        s.sequences['falling'] = new qr.sprite_sequence(g_character_spritesheet, [0]);
+        let walk = s.sequences['walk'] = new qr.sprite_sequence(g_character_spritesheet, [4 ,5, 6, 5]);
+        walk.loop = true;
+        walk.set_duration(0.3);
+
+        s.play('walk');
+        s.offset = qm.v(0, -1);
+        
+        qf.attach_prim(a, s, {x, y, width: 10, height: 14, coll_mask: qf.cc.pawn, root: true});
+
+        let pistol = qf.attach_prim(a, new qc.sprite_component(), {x: 10, y: 0, name: 'weapon_sprite'});
+        pistol.parent = s;
+        pistol.flip_x = true;
+        pistol.sprite = g_character_spritesheet.get_sprite(8);
+
         qf.attach_cmp(a, new player_movement());
         qf.attach_cmp(a, new player_controller());
         world.player = a;
         return a;
     }
 
+    function spawn_tile(actor: qf.actor, {x, y}, id: string) {
+        let s = qf.attach_prim(actor, new qc.sprite_component(), {x, y, width: 10, height: 10});
+        s.sprite = g_tile_spritesheet.get_sprite(90 + parseInt(id, 16));
+    }
+
     function parse_level(data: string, world: qf.world): void
     {
         let geom = world.geometry;
         let x = 0, y = 0;
+        let tile_map = world.spawn_actor();
+
         for (let line of data.split('\n'))
         {
             x = 0;
             for (let char of line)
             {
                 let pos = qm.scale(qm.v(x + 0.5, y + 0.5), geom.tile_size);
-                if (char === '#') geom.set_blocking(x, y, true);
+                if (char === '0' || char === '1') { 
+                    geom.set_blocking(x, y, true);
+                    spawn_tile(tile_map, pos, char);
+                }
                 if (char === '@') spawn_player(world, pos)
                 if (char === 's') qi.spawn_slime(world, pos);
-                if (char === 'h') for(let i=0;i<50;++i)qi.spawn_humanoid(world, pos);
+                if (char === 'h') qi.spawn_humanoid(world, pos);
                 x += 1;
             }
             y += 1;
@@ -1562,10 +1728,11 @@ namespace qg
 
     let world: qf.world;
     let ctx: CanvasRenderingContext2D;
+    export var g_time_dilation = 1;
 
     function tick()
     {
-        world.tick(1/60);
+        world.tick(0.016 * g_time_dilation);
         ctx.clearRect(0, 0, 410, 210);
         qr.render_w(ctx, world);
         window.requestAnimationFrame(tick);
@@ -1585,26 +1752,26 @@ namespace qg
 
 
         parse_level(
-`########################################
-#                                      #
-#                                      #
-#                                      #
-#                                      #
-#                                      #
-#                                      #
-#        @                             #
-#      ######                          #
-#                      h               #
-#                    ####      ###     #
-#                                      #
-#                                      #
-#                                      #
-#                                      #
-#                                      #
-#             ####  ######    #####    #
-#    ### ######                        #
-#                                      #
-########################################`
+`0000000000000000000000000000000000000000
+0                                      0
+0                                      0
+0                                      0
+0                                      0
+0                                      0
+0                                      0
+0        @                             0
+0      000000                          0
+0                                      0
+0                    0000      000     0
+0                                      0
+0                                      0
+0                                      0
+0                                      0
+0                                      0
+0             0000  000000    00000    0
+0    000 000000                        0
+0                                      0
+1111111111111111111111111111111111111111`
                     , world)
 
         let tdebug = new debug_draw_collisions();
