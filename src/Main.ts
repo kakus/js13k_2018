@@ -52,6 +52,7 @@ namespace qm
     export function clamp(x: number, min: number, max: number) { return Math.max(Math.min(x, max), min); }
     export function eq_eps(a: number, b: number, eps = 0.01) { return Math.abs(a - b) < eps; }
     export function rnd(min = 0, max = 1) { return min + (max - min) * Math.random(); }
+    export function rnd_select<T>(...elements: T[]): T { return elements[qm.rnd(0, elements.length) | 0]};
 
     export type aabb = [vec, vec];
 
@@ -276,6 +277,29 @@ namespace qf
 {
     export function unimplemented() { throw new Error("unimplemented"); }
 
+    export type bindable = actor | component_base;
+
+    export class multicast_delegate<T extends Function> {
+        protected delegates: [T, bindable][] = [];
+
+        public broadcast(...args: any[]): void {
+            for (let i = this.delegates.length - 1; i >= 0; --i) {
+                let [d, owner] = this.delegates[i];
+                if (owner.is_valid()) {
+                    d.apply(owner, args);
+                } else {
+                    this.delegates.splice(i, 1);
+                }
+            }
+        }
+
+        public bind(fn: T, owner: bindable): void {
+            if (owner.is_valid()) {
+                this.delegates.push([fn, owner]);
+            }
+        }
+    }
+
     export class hit_result {
         constructor(
             public readonly pos: qm.vec = qm.zero,
@@ -300,6 +324,7 @@ namespace qf
         public begin_play(): void { }
         public get_world() { return this.owner.world; }
         public get_timer() { return this.owner.world.timer; }
+        public is_valid() { return this.owner && this.owner.is_valid(); }
     }
 
     export abstract class scene_component extends component_base
@@ -309,6 +334,7 @@ namespace qf
         public rot: number = 0;
         public parent: scene_component;
         public bounds: qm.vec = qm.v(0, 0);
+        public visible = true;
         public collision_mask = cc.none;
 
         public render_c2d(ctx: CanvasRenderingContext2D): void
@@ -366,11 +392,22 @@ namespace qf
         }
     }
 
+    export class damage_event {
+        constructor(
+            public readonly damage: number,
+            public readonly instigator: qf.actor,
+            public readonly dir = qm.v()
+        ) { }
+    }
+
+    export type damage_delegate = (e: damage_event) => void;
+
     export class actor
     {
         public world: world;
         public components: component_base[] = [];
         public root: scene_component;
+        public readonly on_take_damage = new qf.multicast_delegate<damage_delegate>();
 
         public is_valid(): boolean {
             return !!this.world;
@@ -596,28 +633,49 @@ namespace qf
 // render
 namespace qr
 {
+    export function create_canvas(width: number, height: number, cb?: (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => void): HTMLCanvasElement {
+        let c = document.createElement('canvas');
+        c.width = width;
+        c.height = height;
+        let ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        if (cb) {
+            cb(ctx, c);
+        }
+        return c;
+    }
+
+    export function is_img_loaded(img: HTMLImageElement | HTMLCanvasElement): boolean {
+        if (img instanceof HTMLImageElement) {
+            return img && img.complete && img.naturalHeight !== 0;
+        }
+        return true;
+    }
+
     export class sprite_data {
         constructor(
-            public readonly image: HTMLImageElement,
+            public readonly image: HTMLImageElement | HTMLCanvasElement,
+            public readonly negative: HTMLImageElement | HTMLCanvasElement,
             public readonly position: qm.vec,
             public readonly size: qm.vec
         ) { }
 
         public is_valid() {
-            return this.image && this.image.complete && this.image.naturalHeight !== 0;
+            return qr.is_img_loaded(this.image);
         }
     }
 
     export class spritesheet {
         constructor(
             public readonly image: HTMLImageElement,
+            public readonly negative_image: HTMLImageElement | HTMLCanvasElement,
             public readonly cell_size: qm.vec,
             public readonly grid_size: qm.vec
         ) { }
 
         public get_sprite(id: number): sprite_data {
             let x = id % this.grid_size.x, y = Math.floor(id / this.grid_size.x);
-            return new sprite_data(this.image, qm.mul(qm.v(x, y), this.cell_size), this.cell_size);
+            return new sprite_data(this.image, this.negative_image, qm.mul(qm.v(x, y), this.cell_size), this.cell_size);
         }
     }
 
@@ -690,7 +748,9 @@ namespace qr
     {
         for (let prim of prmitives) 
         {
-            prim.render_c2d(ctx);
+            if (prim.visible) {
+                prim.render_c2d(ctx);
+            }
         }
     }
 }
@@ -1187,9 +1247,10 @@ namespace qc {
     }
 
     export class sprite_component extends qf.scene_component {
-        public sprite: qr.sprite_data;
+        public sprite = new qr.sprite_data(null, null, qm.zero, qm.v(10, 10));
         public flip_x = false;
         public offset: qm.vec;
+        public negative = false;
 
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
             const sp = this.sprite.position,
@@ -1205,18 +1266,8 @@ namespace qc {
 
 
             if (this.sprite.is_valid()) {
-            // ctx.fillStyle = 'white';
-            //     ctx.fillRect(-ss.x/2,  -ss.y/2, ss.x, ss.y);
-
-            // ctx.globalCompositeOperation = 'destination-in';
-                ctx.drawImage(this.sprite.image, sp.x, sp.y, ss.x, ss.y,
+                ctx.drawImage(this.negative ? this.sprite.negative : this.sprite.image, sp.x, sp.y, ss.x, ss.y,
                     -ss.x / 2, -ss.y / 2, ss.x, ss.y);
-            // ctx.globalCompositeOperation = 'difference';
-            //     ctx.drawImage(this.sprite.image, sp.x, sp.y, ss.x, ss.y,
-            //         -ss.x / 2, -ss.y / 2, ss.x, ss.y);
-            // ctx.globalCompositeOperation = 'source-over';
-
-
             } else {
                 ctx.fillStyle = 'red';
                 ctx.fillRect(-ss.x/2,  -ss.y/2, ss.x, ss.y);
@@ -1226,11 +1277,14 @@ namespace qc {
 
     export class anim_sprite_component extends qc.sprite_component {
         public sequences: {[name:string]: qr.sprite_sequence} = {}
-        public current_sequence: string;
+        public current_sequence = '';
 
         public play(name: string): void {
-            qu.assert(!!this.sequences[name]);
-            this.current_sequence = name;
+            if (this.current_sequence != name) {
+                qu.assert(!!this.sequences[name]);
+                this.current_sequence = name;
+                this.sprite = this.sequences[name].get_current_frame();
+            }
         }
 
         public tick(delta: number): void {
@@ -1320,23 +1374,61 @@ namespace qi
         public root: qf.scene_component;
         public hitpoints = 1;
         public max_hitpoints = 1;
+        public base_damage = 1;
+        public atk_speed = 0.5;
+
+        protected atk_lock = false;
 
         public begin_play()
         {
             super.begin_play();
             this.target = this.owner.world.player;
             this.root = this.owner.root;
+            this.owner.on_take_damage.bind(this.take_damage, this);
+            this.get_timer().every(0.1, this.update, this);
+        }
+
+        protected update(): void {
+            if (this.overlaps_target() && !this.atk_lock) {
+                let dir = qm.sub(this.target.get_pos(), this.owner.get_pos());
+                this.target.on_take_damage.broadcast(new qf.damage_event(this.base_damage, this.owner, dir));
+                this.get_timer().delay(this.atk_speed, _ => this.atk_lock = false, this);
+                this.atk_lock = true;
+            }
         }
         
-        public take_damage(damage: number) {
-            this.hitpoints -= damage;
+        public take_damage(e: qf.damage_event) {
+            this.hitpoints -= e.damage;
+
+            if (this.root instanceof qc.sprite_component) {
+                let r = this.root;
+                r.negative = true;
+                // r.visible = false;
+                this.get_timer().delay(0.05, _ => { r.negative = false;  r.visible = false }, this);
+                this.get_timer().delay(0.10, _ => { r.negative = false; r.visible = true}, this);
+            }
+            
             if (this.hitpoints <= 0) {
                 this.handle_death();
             }
         }
 
         public handle_death(): void {
+            let c = this.get_world().actors.filter(a => a.getcmp(qi.humanoid_ai)[0]);
+
+            if (c.length === 1) {
+                qg.g_stage += 1;
+                for (let i = 0; i < qg.g_stage; ++i) {
+                    qi.spawn_humanoid(this.get_world(), { x: qm.rnd(30, 340), y: 30 });
+                }
+            }
+            qg.g_time_dilation = 0.5;
+            setTimeout(_ => qg.g_time_dilation = 1, 1000);
             this.owner.destroy();
+        }
+
+        protected overlaps_target(): boolean {
+            return qm.overlap_aabb(this.root.get_aabb(), this.target.root.get_aabb());
         }
     }
 
@@ -1382,19 +1474,22 @@ namespace qi
 
     export class humanoid_ai extends enemy_controller {
         public mov: qi.ai_movement;
-        public tick_delegate: qf.timer_event;
+        public think_event: qf.timer_event;
+        public dimishing_return = 1;
 
         public begin_play() {
             super.begin_play()
             this.mov = this.owner.getcmp(qi.ai_movement)[0];
-            this.mov.max_velocity_on_ground = 100;
-            this.tick_delegate = this.get_timer().every(0.33, this.tick_impl, this);
+            // this.mov.max_velocity_on_ground = 100    ;
+            this.think_event = this.get_timer().every(0.033, this.think, this);
             // this.getworld().timer.delay(qm.rnd(0, 1), _ => {
             //     this.getworld().timer.every(0.1, this.btick.bind(this))
             // });
         }
 
-        public tick_impl(delta: number) {
+        public think(delta: number) {
+            this.dimishing_return = qm.clamp(this.dimishing_return + 0.01, 0, 1);
+
             let g = this.owner.world.geometry as ql.tile_geometry;
             let path = g.find_path(this.root.pos, this.target.root.pos, default_walk_filter);
             if (path) {
@@ -1406,12 +1501,14 @@ namespace qi
             }
         }
 
-        public take_damage(damage: number): void {
-            this.tick_delegate.fire_in = 1;
+        public take_damage(e: qf.damage_event): void {
+            this.think_event.fire_in = 0.5 * this.dimishing_return;
             this.mov.input = qm.v();
-            // this.mov.vel = qm.v();
-            this.mov.acc = qm.v();
-            super.take_damage(damage);
+            this.mov.vel.x -= 1000 * e.dir.x * this.dimishing_return;
+            this.mov.vel.y -= 300 * this.dimishing_return;
+
+            this.dimishing_return = qm.clamp(this.dimishing_return - 0.1, 0, 1);
+            super.take_damage(e);
         }
     }
 
@@ -1428,11 +1525,12 @@ namespace qi
     export function spawn_humanoid(world: qf.world, {x, y}): qf.actor
     {
         let a = world.spawn_actor();
-        let r = qf.attach_prim(a, new qf.rect_primitve(), {x, y, coll_mask: qf.cc.pawn, root: true});
-        r.fill_color = 'orange';
-        qf.attach_cmp(a, new ai_movement());
+        let r = qf.attach_prim(a, new qc.anim_sprite_component(), {x, y, coll_mask: qf.cc.pawn, root: true});
+        r.sprite = qg.g_character_spritesheet.get_sprite(19);
+
+        let mov = qf.attach_cmp(a, new ai_movement());
         let h = qf.attach_cmp(a, new humanoid_ai());
-        h.hitpoints = 3;
+        h.hitpoints = 8;
         h.max_hitpoints = 3;
         return a;
     }
@@ -1441,9 +1539,10 @@ namespace qi
 namespace qg
 {
     export const g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
-    // export const g_inverted_spritesheet = new HTMLCanvasElement();
-    export const g_character_spritesheet = new qr.spritesheet(g_spritesheet_image, qm.v(14, 18), qm.v(4, 4));
-    export const g_tile_spritesheet = new qr.spritesheet(g_spritesheet_image, qm.v(10, 10), qm.v(10, 10));
+    export const g_negative_spritesheet_image = qr.create_canvas(128, 128);
+    export const g_character_spritesheet = new qr.spritesheet(g_spritesheet_image, g_negative_spritesheet_image, qm.v(14, 18), qm.v(9, 9));
+    export const g_tile_spritesheet = new qr.spritesheet(g_spritesheet_image, g_negative_spritesheet_image, qm.v(10, 10), qm.v(10, 10));
+    export var g_stage = 1;
 
     class player_movement extends qc.character_movement
     {
@@ -1513,7 +1612,7 @@ namespace qg
         public acc = qm.v(0, 1000);
         public vel = qm.v();
         public lifespan = 0;
-        public on_hit_delegate: (hit_result: qf.hit_result, bullet: this) => void;
+        public on_hit = new qf.multicast_delegate<(hit_result: qf.hit_result, bullet: this) => void>();
 
         public begin_play() {
             if (this.lifespan > 0) {
@@ -1537,9 +1636,7 @@ namespace qg
                 this.acc = qm.v();
                 r.pos = qm.vc(hit_result.pos);
                 this.tick = undefined;
-                if (this.on_hit_delegate) {
-                    this.on_hit_delegate(hit_result, this);
-                }
+                this.on_hit.broadcast(hit_result, this);
             }
             else
             {
@@ -1657,16 +1754,20 @@ namespace qg
     {
         let a = world.spawn_actor();
 
-        let r = qf.attach_prim(a, new qc.sprite_component(), {root: true});
+        let r = qf.attach_prim(a, new qc.anim_sprite_component(), {root: true});
         r.pos = loc;
         r.bounds = qm.v(8, 6);
-        r.sprite = g_character_spritesheet.get_sprite(12);
+        r.sequences['fire'] = new qr.sprite_sequence(g_character_spritesheet, [27, 28], [0.02, 1]);
+        r.sequences['explode'] = new qr.sprite_sequence(g_character_spritesheet, [29, 30, qm.rnd_select(31, 32), 8], [0.03, 0.03, 0.05, 1]);
+        r.play('fire');
 
         let p = new projectile_movement();
         p.vel = dir;
         p.acc.y = gravity;
         p.lifespan = lifespan;
+        p.on_hit.bind(_ => r.play('explode'), r);
         qf.attach_cmp(a, p);
+
 
         return a;
     }
@@ -1685,15 +1786,16 @@ namespace qg
             [this.movement] = this.owner.getcmp(player_movement);
             [this.sprite]   = this.owner.getcmp(qc.anim_sprite_component);
             [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite') as qc.sprite_component[];
-            this.fire_delegate = this.get_world().timer.throttle(0.25, this.fire, this);
+            this.fire_delegate = this.get_world().timer.throttle(0.15, this.fire, this);
+            this.owner.on_take_damage.bind(this.take_damage, this);
 
-            this.get_timer().every(2, _ => {
-                if (qm.rnd() > 0.2) {
-                    qi.spawn_humanoid(this.get_world(), {x: 30, y: 40});
-                } else {
-                    qi.spawn_slime(this.get_world(), {x:100, y:40});
-                }
-            }, this);
+            // this.get_timer().every(4, _ => {
+            //     if (qm.rnd() > 0.2) {
+            //         qi.spawn_humanoid(this.get_world(), {x: 30, y: 40});
+            //     } else {
+            //         qi.spawn_slime(this.get_world(), {x:100, y:40});
+            //     }
+            // }, this);
         }
 
         public tick(delta: number): void
@@ -1713,10 +1815,10 @@ namespace qg
                 } else {
                     this.sprite.play('walk');
                 }
-                g_time_dilation = 1;
+                // g_time_dilation = 1;
             } else {
                 this.sprite.play('jump');
-                g_time_dilation = 0.5;
+                // g_time_dilation = 0.5;
             }
 
             if (qs.input.keyboard.is_down('z')) {
@@ -1751,23 +1853,26 @@ namespace qg
             // }
         }
 
+        protected take_damage(e: qf.damage_event): void {
+            reset();
+        }
+
         protected fire(): void {
             let a = this.owner;
             let dir = this.movement.moving_left ? qm.left : qm.right;
-            dir = qm.scale(dir, 300);
-            let b = spawn_projectile(a.world, this.weapon_sprite.get_pos(), dir, {lifespan: 0.4, gravity: 0});
-            b.getcmp(projectile_movement)[0].on_hit_delegate = this.on_bullet_hit.bind(this);
+            dir = qm.scale(dir, 400);
+            let b = spawn_projectile(a.world, this.weapon_sprite.get_pos(), dir, {lifespan: 0.3, gravity: 0});
+            b.getcmp(projectile_movement)[0].on_hit.bind(this.on_bullet_hit, this);
             this.movement.vel.x += dir.x * -0.1;
             this.weapon_sprite.rot = this.movement.moving_left ? 3.14/2 :-3.14/2;
         }
 
         protected on_bullet_hit(hit: qf.hit_result, bullet: projectile_movement): void {
             if (hit.actor) {
-                let enemy = hit.actor.getcmp(qi.enemy_controller)[0];
-                enemy.take_damage(1);
-                let m = hit.actor.getcmp(qc.character_movement)[0];
-                m.vel.x -= hit.normal.x * 1000;
-                m.vel.y -= 500;
+                hit.actor.on_take_damage.broadcast(new qf.damage_event(1, this.owner, hit.normal));
+                // let m = hit.actor.getcmp(qc.character_movement)[0];
+                // m.vel.x -= hit.normal.x * 1000;
+                // m.vel.y -= 500;
             }
         }
     }
@@ -1779,9 +1884,9 @@ namespace qg
         let idle = s.sequences['idle'] = new qr.sprite_sequence(g_character_spritesheet, [0, 1]);
         idle.loop = true;
 
-        s.sequences['jump'] = new qr.sprite_sequence(g_character_spritesheet, [4]);
+        s.sequences['jump'] = new qr.sprite_sequence(g_character_spritesheet, [9]);
         s.sequences['falling'] = new qr.sprite_sequence(g_character_spritesheet, [0]);
-        let walk = s.sequences['walk'] = new qr.sprite_sequence(g_character_spritesheet, [4 ,5, 6, 5]);
+        let walk = s.sequences['walk'] = new qr.sprite_sequence(g_character_spritesheet, [9 ,10, 11, 10]);
         walk.loop = true;
         walk.set_duration(0.3);
 
@@ -1793,10 +1898,14 @@ namespace qg
         let pistol = qf.attach_prim(a, new qc.sprite_component(), {x: 10, y: 0, name: 'weapon_sprite'});
         pistol.parent = s;
         pistol.flip_x = true;
-        pistol.sprite = g_character_spritesheet.get_sprite(8);
+        pistol.sprite = g_character_spritesheet.get_sprite(18);
 
         qf.attach_cmp(a, new player_movement());
         qf.attach_cmp(a, new player_controller());
+
+        let tdebug = new debug_draw_collisions();
+        qf.attach_prim(a, tdebug, {});
+
         world.player = a;
         return a;
     }
@@ -1843,13 +1952,11 @@ namespace qg
         window.requestAnimationFrame(tick);
     }
 
-    export function main()
-    {
-        let canvas: HTMLCanvasElement = document.querySelector("#canvas");
-        ctx = canvas.getContext("2d");
-        ctx.imageSmoothingEnabled = false;
-        ctx.translate(10.5, 10.5);
-        ctx.scale(2, 2);
+    function reset() {
+        g_stage = 1;
+        if (world) {
+            console.log('score: ', world.actors.filter(a => a.getcmp(qi.humanoid_ai)[0]).length);
+        }
 
         
         let t = new ql.tile_geometry(40, 20, 10);
@@ -1868,31 +1975,60 @@ namespace qg
 0                                      0
 0        @                             0
 0      000000                          0
-0                                      0
+0                     h                0
 0                    0000      000     0
 0                                      0
 0                                      0
 0                                      0
 0                                      0
-0                     h        h       0
-0             0000  000000    00000    0
+0                                      0
+0             0000   00000    00000    0
 0    000 000000                        0
 0                                      0
 1111111111111111111111111111111111111111`
                     , world)
 
-        let tdebug = new debug_draw_collisions();
-        qf.attach_prim(world.player, tdebug, {});
 
-        qs.input.init(canvas);
+
 
         world.has_begun_play = true;
         for (let a of world.actors)
             for (let c of a.components) 
                 c.begin_play();
+    }
 
+    export function main()
+    {
+        let canvas: HTMLCanvasElement = document.querySelector("#canvas");
+        ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
+        ctx.translate(10.5, 10.5);
+        ctx.scale(2, 2);
+
+        { 
+            let c = g_negative_spritesheet_image.getContext('2d');
+            let {width, height} = g_negative_spritesheet_image;
+            c.drawImage(g_spritesheet_image, 0, 0);
+            c.fillStyle = 'white';
+            c.globalCompositeOperation = 'source-in';
+            c.fillRect(0, 0, width, height);
+            // c.globalCompositeOperation = 'difference';
+            // c.drawImage(g_spritesheet_image, 0, 0);
+        }
+
+        reset();
+
+        qs.input.init(canvas);
         window.requestAnimationFrame(tick);
+    }
+
+    export function load() {
+        if (qr.is_img_loaded(g_spritesheet_image)) {
+            qg.main();
+        } else {
+            setTimeout(load, 100);
+        }
     }
 }
 
-qg.main();
+qg.load();
