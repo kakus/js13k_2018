@@ -298,7 +298,8 @@ namespace qf
         public owner: actor;
         public name = '';
         public begin_play(): void { }
-        public getworld() { return this.owner.world; }
+        public get_world() { return this.owner.world; }
+        public get_timer() { return this.owner.world.timer; }
     }
 
     export abstract class scene_component extends component_base
@@ -329,6 +330,13 @@ namespace qf
             }
             this.render_c2d_impl(ctx);
             ctx.restore();
+        }
+
+        public get_pos(): qm.vec {
+            if (this.parent) {
+                return qm.transform(qm.zero, this.get_world_transform());
+            }
+            return qm.vc(this.pos);
         }
 
         public get_aabb(ext: qm.vec = qm.zero): qm.aabb {
@@ -372,8 +380,8 @@ namespace qf
             this.world.destroy_actor(this); 
         }
 
-        public getpos(): qm.vec {
-            return qm.vc(this.root.pos);
+        public get_pos(): qm.vec {
+            return this.root.get_pos();
         }
         
         public getcmp<T extends component_base>(clazz: Function & { prototype: T }): T[] {
@@ -495,7 +503,7 @@ namespace qf
         repeat
     }
 
-    class timer_event {
+    export class timer_event {
         public fire_in = 0;
 
         constructor(
@@ -503,22 +511,20 @@ namespace qf
             public type: timer_type,
             public delay: number,
             public fn: Function,
-            public actor?: qf.actor
+            public actor: qf.actor,
+            public ctx?: any
         ) { 
             this.fire_in = delay;
         }
 
         public execute() {
             if (this.is_valid()) {
-                this.fn.call(this.actor);
+                this.fn.call(this.ctx);
             }
         }
 
         public is_valid() {
-            if (this.actor) {
-                return this.actor.is_valid();
-            }
-            return true;
+            return this.actor && this.actor.is_valid();
         }
 
         public reset() { 
@@ -536,6 +542,11 @@ namespace qf
             {
                 let e = this.events[i];
 
+                if (!e.is_valid()) {
+                    this.events.splice(i, 1);
+                    continue;
+                }
+
                 e.fire_in -= delta;
                 if (e.fire_in <= 0) {
                     e.execute();
@@ -545,18 +556,39 @@ namespace qf
             }
         }
 
-        public delay(delay: number, fn: Function, actor?: qf.actor): timer_event
-        {
-            let e = new timer_event(this, timer_type.once, delay, fn, actor);
+        protected add_timer(time: number, type: timer_type, fn: Function, ctx: qf.actor | qf.component_base): timer_event {
+            let actor: qf.actor;
+
+            if (ctx instanceof qf.actor) {
+                actor = ctx;
+            } else {
+                actor = ctx.owner;
+            } 
+        
+            let e = new timer_event(this, type, time, fn, actor, ctx);
             this.events.push(e);
             return e;
         }
 
-        public every(timespan: number, fn: Function, actor?: qf.actor): timer_event
+        public delay(delay: number, fn: Function, ctx: qf.actor | qf.component_base): timer_event
         {
-            let e = new timer_event(this, timer_type.repeat, timespan, fn, actor);
-            this.events.push(e);
-            return e;
+            return this.add_timer(delay, timer_type.once, fn, ctx);
+        }
+
+        public every(timespan: number, fn: Function, ctx: qf.actor | qf.component_base): timer_event
+        {
+            return this.add_timer(timespan, timer_type.repeat, fn, ctx);
+        }
+
+        public throttle<T extends (...args: any[]) => void>(delay: number, fn: T, ctx: qf.actor | qf.component_base): T {
+            let lock = false;
+            return ((...args: any[]) => {
+                if (!lock) {
+                    lock = true;
+                    this.delay(delay, _ => lock = false, ctx);
+                    fn.apply(ctx, args);
+                }
+            }) as T;
         }
     }
 }
@@ -1171,9 +1203,20 @@ namespace qc {
                 ctx.translate(this.offset.x, this.offset.y);
             }
 
+
             if (this.sprite.is_valid()) {
+            // ctx.fillStyle = 'white';
+            //     ctx.fillRect(-ss.x/2,  -ss.y/2, ss.x, ss.y);
+
+            // ctx.globalCompositeOperation = 'destination-in';
                 ctx.drawImage(this.sprite.image, sp.x, sp.y, ss.x, ss.y,
                     -ss.x / 2, -ss.y / 2, ss.x, ss.y);
+            // ctx.globalCompositeOperation = 'difference';
+            //     ctx.drawImage(this.sprite.image, sp.x, sp.y, ss.x, ss.y,
+            //         -ss.x / 2, -ss.y / 2, ss.x, ss.y);
+            // ctx.globalCompositeOperation = 'source-over';
+
+
             } else {
                 ctx.fillStyle = 'red';
                 ctx.fillRect(-ss.x/2,  -ss.y/2, ss.x, ss.y);
@@ -1275,12 +1318,25 @@ namespace qi
     {
         public target: qf.actor;
         public root: qf.scene_component;
+        public hitpoints = 1;
+        public max_hitpoints = 1;
 
         public begin_play()
         {
             super.begin_play();
             this.target = this.owner.world.player;
             this.root = this.owner.root;
+        }
+        
+        public take_damage(damage: number) {
+            this.hitpoints -= damage;
+            if (this.hitpoints <= 0) {
+                this.handle_death();
+            }
+        }
+
+        public handle_death(): void {
+            this.owner.destroy();
         }
     }
 
@@ -1294,15 +1350,15 @@ namespace qi
             [this.mov] = this.owner.getcmp(qc.character_movement);
             this.mov.bounce_off_wall = true;
 
-            this.getworld().timer.delay(qm.rnd(), _ => {
-                this.getworld().timer.every(qm.rnd(2.6, 3), this.do_jump.bind(this), this.owner);
+            this.get_world().timer.delay(qm.rnd(), _ => {
+                this.get_world().timer.every(qm.rnd(2.6, 3), this.do_jump.bind(this), this.owner);
             }, this.owner);
         }
 
         public do_jump(): void
         {
-            let dir = qm.sign(qm.sub(this.target.getpos(), this.root.pos));
-            let w = this.getworld();
+            let dir = qm.sign(qm.sub(this.target.get_pos(), this.root.pos));
+            let w = this.get_world();
             let start = this.root.pos;
 
             // debug
@@ -1326,16 +1382,19 @@ namespace qi
 
     export class humanoid_ai extends enemy_controller {
         public mov: qi.ai_movement;
+        public tick_delegate: qf.timer_event;
 
         public begin_play() {
             super.begin_play()
             this.mov = this.owner.getcmp(qi.ai_movement)[0];
+            this.mov.max_velocity_on_ground = 100;
+            this.tick_delegate = this.get_timer().every(0.33, this.tick_impl, this);
             // this.getworld().timer.delay(qm.rnd(0, 1), _ => {
             //     this.getworld().timer.every(0.1, this.btick.bind(this))
             // });
         }
 
-        public tick(delta: number) {
+        public tick_impl(delta: number) {
             let g = this.owner.world.geometry as ql.tile_geometry;
             let path = g.find_path(this.root.pos, this.target.root.pos, default_walk_filter);
             if (path) {
@@ -1345,6 +1404,14 @@ namespace qi
                 this.mov.input.x = 0;
                 this.mov.input.y = 0;
             }
+        }
+
+        public take_damage(damage: number): void {
+            this.tick_delegate.fire_in = 1;
+            this.mov.input = qm.v();
+            // this.mov.vel = qm.v();
+            this.mov.acc = qm.v();
+            super.take_damage(damage);
         }
     }
 
@@ -1364,7 +1431,9 @@ namespace qi
         let r = qf.attach_prim(a, new qf.rect_primitve(), {x, y, coll_mask: qf.cc.pawn, root: true});
         r.fill_color = 'orange';
         qf.attach_cmp(a, new ai_movement());
-        qf.attach_cmp(a, new humanoid_ai());
+        let h = qf.attach_cmp(a, new humanoid_ai());
+        h.hitpoints = 3;
+        h.max_hitpoints = 3;
         return a;
     }
 }
@@ -1372,6 +1441,7 @@ namespace qi
 namespace qg
 {
     export const g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
+    // export const g_inverted_spritesheet = new HTMLCanvasElement();
     export const g_character_spritesheet = new qr.spritesheet(g_spritesheet_image, qm.v(14, 18), qm.v(4, 4));
     export const g_tile_spritesheet = new qr.spritesheet(g_spritesheet_image, qm.v(10, 10), qm.v(10, 10));
 
@@ -1443,10 +1513,11 @@ namespace qg
         public acc = qm.v(0, 1000);
         public vel = qm.v();
         public lifespan = 0;
+        public on_hit_delegate: (hit_result: qf.hit_result, bullet: this) => void;
 
         public begin_play() {
             if (this.lifespan > 0) {
-                this.getworld().timer.delay(this.lifespan, _ => this.owner.destroy(), this.owner);
+                this.get_timer().delay(this.lifespan, _ => this.owner.destroy(), this.owner);
             }
         }
 
@@ -1464,15 +1535,11 @@ namespace qg
             {
                 this.vel = qm.v();
                 this.acc = qm.v();
-                r.pos = hit_result.pos;
-                // setTimeout( _ => this.owner.destory(), 1000);
-                if (hit_result.actor)
-                    // (<qf.rect_primitve>r).fill_color = 'red';
-                    hit_result.actor.destroy();
+                r.pos = qm.vc(hit_result.pos);
                 this.tick = undefined;
-
-                // this.owner.destroy();
-            
+                if (this.on_hit_delegate) {
+                    this.on_hit_delegate(hit_result, this);
+                }
             }
             else
             {
@@ -1590,10 +1657,10 @@ namespace qg
     {
         let a = world.spawn_actor();
 
-        let r = qf.attach_prim(a, new qf.rect_primitve(), {root: true});
+        let r = qf.attach_prim(a, new qc.sprite_component(), {root: true});
         r.pos = loc;
-        r.bounds = qm.v(10, 3);
-        r.fill_color = 'rgba(0, 255, 0, 0.7)';
+        r.bounds = qm.v(8, 6);
+        r.sprite = g_character_spritesheet.get_sprite(12);
 
         let p = new projectile_movement();
         p.vel = dir;
@@ -1611,12 +1678,22 @@ namespace qg
         private weapon_sprite: qc.sprite_component;
         private z_press_start = -1;
         private last_fire_time = 0;
+        private fire_delegate: Function;
 
         public begin_play()
         {
             [this.movement] = this.owner.getcmp(player_movement);
             [this.sprite]   = this.owner.getcmp(qc.anim_sprite_component);
             [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite') as qc.sprite_component[];
+            this.fire_delegate = this.get_world().timer.throttle(0.25, this.fire, this);
+
+            this.get_timer().every(2, _ => {
+                if (qm.rnd() > 0.2) {
+                    qi.spawn_humanoid(this.get_world(), {x: 30, y: 40});
+                } else {
+                    qi.spawn_slime(this.get_world(), {x:100, y:40});
+                }
+            }, this);
         }
 
         public tick(delta: number): void
@@ -1626,6 +1703,8 @@ namespace qg
             this.sprite.flip_x = !this.movement.moving_left;
             this.weapon_sprite.pos.x = this.movement.moving_left ? -10 : 10;
             this.weapon_sprite.flip_x = !this.movement.moving_left;
+            this.weapon_sprite.rot *= 0.9;
+
             let vel = this.movement.vel;
 
             if (this.movement.on_ground) {
@@ -1634,35 +1713,61 @@ namespace qg
                 } else {
                     this.sprite.play('walk');
                 }
+                g_time_dilation = 1;
             } else {
                 this.sprite.play('jump');
-                // this.sprite.play(vel.y > 50 ? 'jump' : 'jump');
-                // this.sprite.scale.x = vel.y < -220 ? 1 - Math.abs(vel.y / 1000) : 1;
+                g_time_dilation = 0.5;
             }
 
-
-            let z_state = qs.input.keyboard.get_state('z');
-            if (z_state.is_down)
-            {
-                this.z_press_start = qs.input.keyboard.get_state('z').timestamp;
+            if (qs.input.keyboard.is_down('z')) {
+                this.fire_delegate();
             }
 
-            if (this.z_press_start > 0)
-            {
-                const press_time = Date.now() - this.z_press_start;
-                const can_fire = this.last_fire_time - this.z_press_start != 0;
+            // this.getworld().timer.throttle(0.1, (i: number) => i, this);
 
-                if (can_fire && (!z_state.is_down|| press_time > 1000)) {
-                    this.last_fire_time = this.z_press_start;
-                    this.z_press_start = 0;
 
-                    let ampl = qm.clamp(press_time / 100, 1, 10);
-                    let dir = qm.clamp_mag(qm.add(
-                            qm.scale(this.movement.moving_left ? qm.left : qm.right, 100 * ampl),
-                            qm.v(0, 0)), 0, 800);
+            // let z_state = qs.input.keyboard.get_state('z');
+            // if (z_state.is_down)
+            // {
+            //     this.z_press_start = qs.input.keyboard.get_state('z').timestamp;
+            // }
 
-                    spawn_projectile(a.world, a.root.pos, dir, {lifespan: 0.6, gravity: 0});
-                }
+            // if (this.z_press_start > 0)
+            // {
+            //     const press_time = Date.now() - this.z_press_start;
+            //     const can_fire = this.last_fire_time - this.z_press_start != 0;
+
+            //     if (can_fire && (!z_state.is_down|| press_time > 1000)) {
+            //         this.last_fire_time = this.z_press_start;
+            //         this.z_press_start = 0;
+
+            //         let ampl = qm.clamp(press_time / 100, 1, 10);
+            //         let dir = qm.clamp_mag(qm.add(
+            //                 qm.scale(this.movement.moving_left ? qm.left : qm.right, 100 * ampl),
+            //                 qm.v(0, 0)), 0, 800);
+
+            //         spawn_projectile(a.world, a.root.pos, dir, {lifespan: 0.6, gravity: 0});
+            //     }
+            // }
+        }
+
+        protected fire(): void {
+            let a = this.owner;
+            let dir = this.movement.moving_left ? qm.left : qm.right;
+            dir = qm.scale(dir, 300);
+            let b = spawn_projectile(a.world, this.weapon_sprite.get_pos(), dir, {lifespan: 0.4, gravity: 0});
+            b.getcmp(projectile_movement)[0].on_hit_delegate = this.on_bullet_hit.bind(this);
+            this.movement.vel.x += dir.x * -0.1;
+            this.weapon_sprite.rot = this.movement.moving_left ? 3.14/2 :-3.14/2;
+        }
+
+        protected on_bullet_hit(hit: qf.hit_result, bullet: projectile_movement): void {
+            if (hit.actor) {
+                let enemy = hit.actor.getcmp(qi.enemy_controller)[0];
+                enemy.take_damage(1);
+                let m = hit.actor.getcmp(qc.character_movement)[0];
+                m.vel.x -= hit.normal.x * 1000;
+                m.vel.y -= 500;
             }
         }
     }
@@ -1745,6 +1850,8 @@ namespace qg
         ctx.imageSmoothingEnabled = false;
         ctx.translate(10.5, 10.5);
         ctx.scale(2, 2);
+
+        
         let t = new ql.tile_geometry(40, 20, 10);
 
         world = new qf.world();
@@ -1767,7 +1874,7 @@ namespace qg
 0                                      0
 0                                      0
 0                                      0
-0                                      0
+0                     h        h       0
 0             0000  000000    00000    0
 0    000 000000                        0
 0                                      0
