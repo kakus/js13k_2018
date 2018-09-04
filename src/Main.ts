@@ -317,10 +317,16 @@ namespace qf
         all       = 0xffffffff
     }
 
+    export function has_tick_method<T extends component_base>(obj: T): obj is (T & {tick: (d:number) => void}) {
+        return obj.wants_tick;
+    }
+
     export abstract class component_base
     {
         public owner: actor;
         public name = '';
+        public wants_tick = false;
+
         public begin_play(): void { }
         public get_world() { return this.owner.world; }
         public get_timer() { return this.owner.world.timer; }
@@ -466,13 +472,9 @@ namespace qf
         {
             this.timer.tick(delta);
 
-            for (let actor of this.actors)
-            {
-                for (let cmp of actor.components)
-                {
-                    if (qu.has_method(cmp, 'tick'))
-                    // if (!(cmp instanceof qf.prmitive_component || cmp instanceof qi.slime_ai))
-                    {
+            for (let actor of this.actors) {
+                for (let cmp of actor.components) {
+                    if (qf.has_tick_method(cmp)) {
                         cmp.tick(delta);
                     }
                 }
@@ -1153,7 +1155,7 @@ namespace ql
                 idx = visited.indexOf(tile_id);
             }
 
-            // paths.push(path);
+            // qi.g_paths.push(path);
             return path.length > 1 ? path : undefined;
         }
 
@@ -1181,6 +1183,7 @@ namespace qc {
         public last_hit: qm.line_trace_result;
         public on_ground = false;
         public moving_left = false;
+        public wants_tick = true;
 
         public trace_wall(dist = 2): qm.line_trace_result {
             let r = this.owner.root;
@@ -1249,7 +1252,7 @@ namespace qc {
     export class sprite_component extends qf.scene_component {
         public sprite = new qr.sprite_data(null, null, qm.zero, qm.v(10, 10));
         public flip_x = false;
-        public offset: qm.vec;
+        public offset = qm.v();
         public negative = false;
 
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
@@ -1260,14 +1263,10 @@ namespace qc {
                 ctx.scale(-1, 1);
             }
 
-            if (this.offset) {
-                ctx.translate(this.offset.x, this.offset.y);
-            }
-
-
             if (this.sprite.is_valid()) {
-                ctx.drawImage(this.negative ? this.sprite.negative : this.sprite.image, sp.x, sp.y, ss.x, ss.y,
-                    -ss.x / 2, -ss.y / 2, ss.x, ss.y);
+                ctx.drawImage(this.negative ? this.sprite.negative : this.sprite.image, 
+                    sp.x, sp.y, ss.x, ss.y,
+                    -ss.x / 2 + this.offset.x, -ss.y / 2 + this.offset.y, ss.x, ss.y);
             } else {
                 ctx.fillStyle = 'red';
                 ctx.fillRect(-ss.x/2,  -ss.y/2, ss.x, ss.y);
@@ -1278,6 +1277,7 @@ namespace qc {
     export class anim_sprite_component extends qc.sprite_component {
         public sequences: {[name:string]: qr.sprite_sequence} = {}
         public current_sequence = '';
+        public wants_tick = true;
 
         public play(name: string): void {
             if (this.current_sequence != name) {
@@ -1331,7 +1331,8 @@ namespace qi
     export class ai_movement extends qc.character_movement
     {
         // setup
-        public on_ground_acc = 500;
+        public ground_acc = 500;
+        public air_acc  = 500;
         public jump_vel = 300;
 
         // runtime
@@ -1340,7 +1341,11 @@ namespace qi
         public tick(delta: number)
         {
             if (this.input.x != 0) {
-                this.acc.x = this.input.x * this.on_ground_acc;
+                if (this.on_ground) {
+                    this.acc.x = this.input.x * this.ground_acc;
+                } else {
+                    this.acc.x = this.input.x * this.air_acc;
+                }
             }
             else if (this.on_ground) {
                 this.vel.x *= 0.8;
@@ -1418,12 +1423,13 @@ namespace qi
 
             if (c.length === 1) {
                 qg.g_stage += 1;
+                let world = this.get_world();
                 for (let i = 0; i < qg.g_stage; ++i) {
-                    qi.spawn_humanoid(this.get_world(), { x: qm.rnd(30, 340), y: 30 });
+                    this.get_timer().delay(qm.rnd(), _ => {
+                        qi.spawn_humanoid(world, { x: qm.rnd(30, 340), y: 30 });
+                    }, this.target);
                 }
             }
-            qg.g_time_dilation = 0.5;
-            setTimeout(_ => qg.g_time_dilation = 1, 1000);
             this.owner.destroy();
         }
 
@@ -1529,8 +1535,9 @@ namespace qi
         r.sprite = qg.g_character_spritesheet.get_sprite(19);
 
         let mov = qf.attach_cmp(a, new ai_movement());
+        mov.ground_acc *= 0.5;
         let h = qf.attach_cmp(a, new humanoid_ai());
-        h.hitpoints = 8;
+        h.hitpoints = 4;
         h.max_hitpoints = 3;
         return a;
     }
@@ -1613,6 +1620,7 @@ namespace qg
         public vel = qm.v();
         public lifespan = 0;
         public on_hit = new qf.multicast_delegate<(hit_result: qf.hit_result, bullet: this) => void>();
+        public wants_tick = true;
 
         public begin_play() {
             if (this.lifespan > 0) {
@@ -1635,7 +1643,7 @@ namespace qg
                 this.vel = qm.v();
                 this.acc = qm.v();
                 r.pos = qm.vc(hit_result.pos);
-                this.tick = undefined;
+                this.wants_tick = false;
                 this.on_hit.broadcast(hit_result, this);
             }
             else
@@ -1725,7 +1733,7 @@ namespace qg
                 }
                 ctx.stroke();
             }
-            // qi.paths = [];
+            qi.g_paths = [];
 
             // ctx.beginPath();
             // ctx.moveTo(pos.x, pos.y);
@@ -1780,6 +1788,7 @@ namespace qg
         private z_press_start = -1;
         private last_fire_time = 0;
         private fire_delegate: Function;
+        public wants_tick = true;
 
         public begin_play()
         {
@@ -2001,7 +2010,7 @@ namespace qg
     {
         let canvas: HTMLCanvasElement = document.querySelector("#canvas");
         ctx = canvas.getContext("2d");
-        ctx.imageSmoothingEnabled = false;
+        ctx['imageSmoothingEnabled'] = false;
         ctx.translate(10.5, 10.5);
         ctx.scale(2, 2);
 
