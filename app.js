@@ -264,9 +264,14 @@ var qf;
         }
     }
     qf.hit_result = hit_result;
+    function has_tick_method(obj) {
+        return obj.wants_tick;
+    }
+    qf.has_tick_method = has_tick_method;
     class component_base {
         constructor() {
             this.name = '';
+            this.wants_tick = false;
         }
         begin_play() { }
         get_world() { return this.owner.world; }
@@ -388,9 +393,7 @@ var qf;
             this.timer.tick(delta);
             for (let actor of this.actors) {
                 for (let cmp of actor.components) {
-                    if (qu.has_method(cmp, 'tick')) 
-                    // if (!(cmp instanceof qf.prmitive_component || cmp instanceof qi.slime_ai))
-                    {
+                    if (qf.has_tick_method(cmp)) {
                         cmp.tick(delta);
                     }
                 }
@@ -960,7 +963,7 @@ var ql;
                 path.unshift(id_to_loc(tile_id));
                 idx = visited.indexOf(tile_id);
             }
-            // paths.push(path);
+            // qi.g_paths.push(path);
             return path.length > 1 ? path : undefined;
         }
         project(point) {
@@ -987,6 +990,7 @@ var qc;
             this.acc = qm.v();
             this.on_ground = false;
             this.moving_left = false;
+            this.wants_tick = true;
         }
         trace_wall(dist = 2) {
             let r = this.owner.root;
@@ -1047,6 +1051,7 @@ var qc;
             super(...arguments);
             this.sprite = new qr.sprite_data(null, null, qm.zero, qm.v(10, 10));
             this.flip_x = false;
+            this.offset = qm.v();
             this.negative = false;
         }
         render_c2d_impl(ctx) {
@@ -1054,11 +1059,8 @@ var qc;
             if (this.flip_x) {
                 ctx.scale(-1, 1);
             }
-            if (this.offset) {
-                ctx.translate(this.offset.x, this.offset.y);
-            }
             if (this.sprite.is_valid()) {
-                ctx.drawImage(this.negative ? this.sprite.negative : this.sprite.image, sp.x, sp.y, ss.x, ss.y, -ss.x / 2, -ss.y / 2, ss.x, ss.y);
+                ctx.drawImage(this.negative ? this.sprite.negative : this.sprite.image, sp.x, sp.y, ss.x, ss.y, -ss.x / 2 + this.offset.x, -ss.y / 2 + this.offset.y, ss.x, ss.y);
             }
             else {
                 ctx.fillStyle = 'red';
@@ -1072,6 +1074,7 @@ var qc;
             super(...arguments);
             this.sequences = {};
             this.current_sequence = '';
+            this.wants_tick = true;
         }
         play(name) {
             if (this.current_sequence != name) {
@@ -1123,14 +1126,20 @@ var qi;
         constructor() {
             super(...arguments);
             // setup
-            this.on_ground_acc = 500;
+            this.ground_acc = 500;
+            this.air_acc = 500;
             this.jump_vel = 300;
             // runtime
             this.input = qm.v();
         }
         tick(delta) {
             if (this.input.x != 0) {
-                this.acc.x = this.input.x * this.on_ground_acc;
+                if (this.on_ground) {
+                    this.acc.x = this.input.x * this.ground_acc;
+                }
+                else {
+                    this.acc.x = this.input.x * this.air_acc;
+                }
             }
             else if (this.on_ground) {
                 this.vel.x *= 0.8;
@@ -1197,12 +1206,13 @@ var qi;
             let c = this.get_world().actors.filter(a => a.getcmp(qi.humanoid_ai)[0]);
             if (c.length === 1) {
                 qg.g_stage += 1;
+                let world = this.get_world();
                 for (let i = 0; i < qg.g_stage; ++i) {
-                    qi.spawn_humanoid(this.get_world(), { x: qm.rnd(30, 340), y: 30 });
+                    this.get_timer().delay(qm.rnd(), _ => {
+                        qi.spawn_humanoid(world, { x: qm.rnd(30, 340), y: 30 });
+                    }, this.target);
                 }
             }
-            qg.g_time_dilation = 0.5;
-            setTimeout(_ => qg.g_time_dilation = 1, 1000);
             this.owner.destroy();
         }
         overlaps_target() {
@@ -1290,8 +1300,9 @@ var qi;
         let r = qf.attach_prim(a, new qc.anim_sprite_component(), { x, y, coll_mask: 8 /* pawn */, root: true });
         r.sprite = qg.g_character_spritesheet.get_sprite(19);
         let mov = qf.attach_cmp(a, new ai_movement());
+        mov.ground_acc *= 0.5;
         let h = qf.attach_cmp(a, new humanoid_ai());
-        h.hitpoints = 8;
+        h.hitpoints = 4;
         h.max_hitpoints = 3;
         return a;
     }
@@ -1362,6 +1373,7 @@ var qg;
             this.vel = qm.v();
             this.lifespan = 0;
             this.on_hit = new qf.multicast_delegate();
+            this.wants_tick = true;
         }
         begin_play() {
             if (this.lifespan > 0) {
@@ -1379,7 +1391,7 @@ var qg;
                 this.vel = qm.v();
                 this.acc = qm.v();
                 r.pos = qm.vc(hit_result.pos);
-                this.tick = undefined;
+                this.wants_tick = false;
                 this.on_hit.broadcast(hit_result, this);
             }
             else {
@@ -1453,7 +1465,7 @@ var qg;
                 }
                 ctx.stroke();
             }
-            // qi.paths = [];
+            qi.g_paths = [];
             // ctx.beginPath();
             // ctx.moveTo(pos.x, pos.y);
             // ctx.lineTo(end.x, end.y);
@@ -1493,6 +1505,7 @@ var qg;
             super(...arguments);
             this.z_press_start = -1;
             this.last_fire_time = 0;
+            this.wants_tick = true;
         }
         begin_play() {
             [this.movement] = this.owner.getcmp(player_movement);
@@ -1669,7 +1682,7 @@ var qg;
     function main() {
         let canvas = document.querySelector("#canvas");
         ctx = canvas.getContext("2d");
-        ctx.imageSmoothingEnabled = false;
+        ctx['imageSmoothingEnabled'] = false;
         ctx.translate(10.5, 10.5);
         ctx.scale(2, 2);
         {
