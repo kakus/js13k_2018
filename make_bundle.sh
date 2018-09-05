@@ -15,6 +15,9 @@ fi
 echo -- Coping files from bin to $OUTDIR 
 cp -rv bin bundle
 
+echo -- Removing debug code
+sed -i "" -e '/#DEBUG-BEGIN/,/#DEBUG-END/d' $OUTDIR/app.js
+
 echo -- Minifying app.js
 java -jar compiler.jar \
    --compilation_level ADVANCED\

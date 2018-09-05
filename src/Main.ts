@@ -850,7 +850,6 @@ namespace ql
         public floor_dist: number[][] = [];
         public jump_dist: number[][] = [];
 
-        // debug
         public d_considered: qm.vec[] = [];
         public d_hits: [qm.vec, qm.vec][] = [];
 
@@ -1019,10 +1018,11 @@ namespace ql
         {
             let hit_result: [qm.vec, qm.vec];
 
-            this.foreach_tile_along_path(start_loc, end_loc, (x, y) => 
-            {
+            this.foreach_tile_along_path(start_loc, end_loc, (x, y) => {
+                // #DEBUG-BEGIN
                 if (this.d_considered)
                     this.d_considered.push(qm.scale(qm.v(x, y), this.tile_size));
+                // #DEBUG-END
 
                 if (this.is_blocking(x, y)) {
                     hit_result = this.line_trace_tile(start_loc, end_loc, x, y);
@@ -1069,8 +1069,10 @@ namespace ql
                             continue;
                         }
 
+                        // #DEBUG-BEGIN
                         if (this.d_considered)
                             this.d_considered.push(qm.scale(qm.v(ix, iy), ts));
+                        // #DEBUG-END
 
                         if (this.is_blocking(ix, iy)) {
                             let tile_aabb: qm.aabb = [tile_center, qm.add(half_size, half_ts)];
@@ -1156,9 +1158,12 @@ namespace ql
                 idx = visited.indexOf(tile_id);
             }
 
+            // #DEBUG-BEGIN
             if (qg.g_draw_paths) {
                 qi.g_paths.push(path);
             }
+            // #DEBUG-END
+
             return path.length > 1 ? path : undefined;
         }
 
@@ -1737,6 +1742,7 @@ namespace qg
         }
     }
 
+    // #DEBUG-BEGIN
     export var g_draw_considered = false;
     export var g_draw_blocking_dist = false;
     export var g_draw_floor_dist = false;
@@ -1840,6 +1846,8 @@ namespace qg
             this.tiles.d_hits = [];
         }
     }
+
+    // #DEBUG-END
 
     export function spawn_projectile(world: qf.world, loc: qm.vec, dir: qm.vec, instigator: qf.actor,
         {lifespan = 0, gravity = 1000, cc = qf.cc.all}): qf.actor
@@ -1992,8 +2000,10 @@ namespace qg
         qf.attach_cmp(a, new player_movement());
         qf.attach_cmp(a, new player_controller());
 
+        // #DEBUG-BEGIN
         let tdebug = new debug_draw_collisions();
         qf.attach_prim(a, tdebug, {});
+        // #DEBUG-END
 
         world.player = a;
         return a;
