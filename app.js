@@ -58,6 +58,12 @@ var qm;
                 a;
     }
     qm.clamp_mag = clamp_mag;
+    function rotate(a, rad) {
+        let c = Math.cos(rad);
+        let s = Math.sin(rad);
+        return v(c * a.x - s * a.y, s * a.x + c * a.y);
+    }
+    qm.rotate = rotate;
     function manhattan_dist(a) { return Math.abs(a.x) + Math.abs(a.y); }
     qm.manhattan_dist = manhattan_dist;
     // general math
@@ -70,6 +76,17 @@ var qm;
     function rnd_select(...elements) { return elements[qm.rnd(0, elements.length) | 0]; }
     qm.rnd_select = rnd_select;
     ;
+    // The Box-Muller transform converts two independent uniform variates on (0, 1) into two standard Gaussian variates (mean 0, variance 1). 
+    function rnd_normal() {
+        let u = 0, v = 0;
+        while (u === 0)
+            u = Math.random(); //Converting [0,1) to (0,1)
+        while (v === 0)
+            v = Math.random();
+        let n = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+        return qm.clamp(n / 10, -1, 1);
+    }
+    qm.rnd_normal = rnd_normal;
     // a, b - any two points
     // return [center, half_size]
     function make_aabb(a, b) {
@@ -718,7 +735,6 @@ var ql;
             this.blocking_dist = [];
             this.floor_dist = [];
             this.jump_dist = [];
-            // debug
             this.d_considered = [];
             this.d_hits = [];
             qu.assert(width > 0 && height > 0);
@@ -857,8 +873,10 @@ var ql;
         line_trace2(start_loc, end_loc) {
             let hit_result;
             this.foreach_tile_along_path(start_loc, end_loc, (x, y) => {
+                // #DEBUG-BEGIN
                 if (this.d_considered)
                     this.d_considered.push(qm.scale(qm.v(x, y), this.tile_size));
+                // #DEBUG-END
                 if (this.is_blocking(x, y)) {
                     hit_result = this.line_trace_tile(start_loc, end_loc, x, y);
                     if (hit_result) {
@@ -890,8 +908,10 @@ var ql;
                         if (qm.dot(dir, tile_dir) < -0.5) {
                             continue;
                         }
+                        // #DEBUG-BEGIN
                         if (this.d_considered)
                             this.d_considered.push(qm.scale(qm.v(ix, iy), ts));
+                        // #DEBUG-END
                         if (this.is_blocking(ix, iy)) {
                             let tile_aabb = [tile_center, qm.add(half_size, half_ts)];
                             if (qm.overlap_point(start, tile_aabb)) {
@@ -963,9 +983,11 @@ var ql;
                 path.unshift(id_to_loc(tile_id));
                 idx = visited.indexOf(tile_id);
             }
+            // #DEBUG-BEGIN
             if (qg.g_draw_paths) {
                 qi.g_paths.push(path);
             }
+            // #DEBUG-END
             return path.length > 1 ? path : undefined;
         }
         project(point) {
@@ -1100,11 +1122,37 @@ var qc;
         }
     }
     qc.anim_sprite_component = anim_sprite_component;
+    class explosion_component extends qf.scene_component {
+        constructor() {
+            super(...arguments);
+            this.wants_tick = true;
+            this.duration = 0.11;
+            this.elpased = 0;
+            this.radious = 10;
+        }
+        tick(delta) {
+            if (this.elpased > this.duration) {
+                this.owner.destroy();
+                qg.g_scene_offset = qm.v();
+            }
+            qg.g_scene_offset.x = qm.rnd(-2, 2);
+            qg.g_scene_offset.y = qm.rnd(-2, 2);
+            this.elpased += delta;
+        }
+        render_c2d_impl(ctx) {
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radious, 0, 2 * Math.PI);
+            ctx.fillStyle = this.elpased / this.duration < 0.5 ? '#000' : '#fff';
+            ctx.fill();
+        }
+    }
+    qc.explosion_component = explosion_component;
 })(qc || (qc = {}));
 // ai
 var qi;
 (function (qi) {
     qi.g_paths = [];
+    qi.g_on_enemy_killed = new qf.multicast_delegate();
     function flying_path_filter(geom, s, e) {
         return !geom.is_blocking(e.x, e.y);
     }
@@ -1128,7 +1176,7 @@ var qi;
             if (dir.x == 0 && e_dist > 1)
                 return false;
             // we can keep goin up while we are near floor or walls
-            if (dir.x != 0 && s_jump > 3)
+            if (dir.x != 0 && s_jump > 2)
                 return false;
         }
         return true;
@@ -1233,6 +1281,7 @@ var qi;
                     }, this.target);
                 }
             }
+            qi.g_on_enemy_killed.broadcast(this.owner);
             this.owner.destroy();
         }
         overlaps_target() {
@@ -1355,8 +1404,9 @@ var qg;
     qg.g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
     qg.g_negative_spritesheet_image = qr.create_canvas(128, 128);
     qg.g_character_spritesheet = new qr.spritesheet(qg.g_spritesheet_image, qg.g_negative_spritesheet_image, qm.v(14, 18), qm.v(9, 9));
-    qg.g_tile_spritesheet = new qr.spritesheet(qg.g_spritesheet_image, qg.g_negative_spritesheet_image, qm.v(10, 10), qm.v(10, 10));
+    qg.g_tile_spritesheet = new qr.spritesheet(qg.g_spritesheet_image, qg.g_negative_spritesheet_image, qm.v(14, 14), qm.v(9, 10));
     qg.g_stage = 1;
+    qg.g_scene_offset = qm.v();
     /**
      *  SPAWN METHODS
      */
@@ -1379,6 +1429,13 @@ var qg;
         return a;
     }
     qg.spawn_bat = spawn_bat;
+    function spawn_explosion(world, { x, y, radious = 15 }) {
+        let a = world.spawn_actor();
+        let e = qf.attach_prim(a, new qc.explosion_component(), { x, y });
+        e.radious = (qm.rnd_normal() + 1) * radious;
+        return a;
+    }
+    qg.spawn_explosion = spawn_explosion;
     class player_movement extends qc.character_movement {
         process_input() {
             const speed = 900;
@@ -1387,15 +1444,17 @@ var qg;
             const move_left = qs.input.keyboard.is_down('ArrowLeft');
             const move_right = qs.input.keyboard.is_down('ArrowRight');
             if (move_left) {
-                this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
+                // this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
+                this.acc.x = -speed;
                 this.moving_left = true;
             }
             else if (move_right) {
-                this.acc.x = speed * (this.on_ground ? 1 : 0.5);
+                // this.acc.x = speed * (this.on_ground ? 1 : 0.5);
+                this.acc.x = speed;
                 this.moving_left = false;
             }
             else if (this.on_ground) {
-                this.vel.x *= 0.6;
+                this.vel.x *= 0.4;
             }
             if (qs.input.keyboard.just_pressed('ArrowUp', 100)) {
                 if (this.on_ground) {
@@ -1450,6 +1509,8 @@ var qg;
                 if (hit.actor) {
                     hit.actor.on_take_damage.broadcast(new qf.damage_event(this.damage, this.instigator, hit.normal));
                 }
+                if (qm.rnd() > 0.8)
+                    qg.spawn_explosion(this.get_world(), hit.pos);
             }, this);
         }
         tick(delta) {
@@ -1472,6 +1533,7 @@ var qg;
             }
         }
     }
+    // #DEBUG-BEGIN
     qg.g_draw_considered = false;
     qg.g_draw_blocking_dist = false;
     qg.g_draw_floor_dist = false;
@@ -1557,6 +1619,7 @@ var qg;
             this.tiles.d_hits = [];
         }
     }
+    // #DEBUG-END
     function spawn_projectile(world, loc, dir, instigator, { lifespan = 0, gravity = 1000, cc = 4294967295 /* all */ }) {
         let a = world.spawn_actor();
         let r = qf.attach_prim(a, new qc.anim_sprite_component(), { root: true });
@@ -1579,23 +1642,27 @@ var qg;
     class player_controller extends qf.component_base {
         constructor() {
             super(...arguments);
-            this.z_press_start = -1;
-            this.last_fire_time = 0;
+            this.bullet_speed = 300;
+            this.fire_spread = 5;
+            this.bullets_per_shoot = 1;
             this.wants_tick = true;
+            this.fire_rate = 5;
         }
         begin_play() {
             [this.movement] = this.owner.getcmp(player_movement);
             [this.sprite] = this.owner.getcmp(qc.anim_sprite_component);
             [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite');
-            this.fire_delegate = this.get_world().timer.throttle(0.15, this.fire, this);
             this.owner.on_take_damage.bind(this.take_damage, this);
-            // this.get_timer().every(4, _ => {
-            //     if (qm.rnd() > 0.2) {
-            //         qi.spawn_humanoid(this.get_world(), {x: 30, y: 40});
-            //     } else {
-            //         qi.spawn_slime(this.get_world(), {x:100, y:40});
-            //     }
-            // }, this);
+            this.set_fire_rate(this.fire_rate);
+            let counter = 0;
+            qi.g_on_enemy_killed.bind(a => {
+                counter += 1;
+                this.set_fire_rate(5 + counter / 2);
+                this.bullet_speed = qm.clamp(this.bullet_speed + 10, 10, 1000);
+                if (this.bullets_per_shoot < 10 && counter % 4 == 0) {
+                    this.bullets_per_shoot += 1;
+                }
+            }, this);
         }
         tick(delta) {
             let a = this.owner;
@@ -1647,15 +1714,41 @@ var qg;
             this.sprite.blink();
             reset();
         }
+        set_fire_rate(rate) {
+            this.fire_delegate = this.get_timer().throttle(1 / qm.clamp(rate, 0.5, 1000), this.fire, this);
+        }
         fire() {
             let a = this.owner;
-            let dir = this.movement.moving_left ? qm.left : qm.right;
-            dir = qm.scale(dir, 400);
-            spawn_projectile(a.world, this.weapon_sprite.get_pos(), dir, this.owner, { lifespan: 0.3, gravity: 0, cc: 8 /* pawn */ | 2 /* geom */ });
-            this.movement.vel.x += dir.x * -0.1;
+            let ml = this.movement.moving_left;
+            let dir = ml ? qm.left : qm.right;
+            let angle = qm.clamp((this.bullets_per_shoot - 1) * 0.087, 0, 0.785) * dir.x;
+            let step = 0;
+            if (this.bullets_per_shoot > 1) {
+                step = (2 * angle) / (this.bullets_per_shoot - 1);
+            }
+            dir = qm.rotate(dir, -angle);
+            for (let i = 0; i < this.bullets_per_shoot; ++i) {
+                spawn_projectile(a.world, this.weapon_sprite.get_pos(), qm.scale(dir, this.bullet_speed), this.owner, { lifespan: 0.3, gravity: 0, cc: 8 /* pawn */ | 2 /* geom */ });
+                dir = qm.rotate(dir, step);
+            }
+            if (this.movement.on_ground)
+                this.movement.vel.x += dir.x * -0.1;
             this.weapon_sprite.rot = this.movement.moving_left ? 3.14 / 2 : -3.14 / 2;
         }
     }
+    // class buff_spawner extends qf.component_base {
+    //     protected enabled = false;
+    //     public begin_play(): void {
+    //         qi.g_on_enemy_killed.bind(this.on_enemy_killed, this);
+    //     }
+    //     public tick(delta: number) {
+    //         if (!this.enabled) return;
+    //         if (qm.overlap_aabb(this.owner.root.get_aabb(), this.get_world().player.root.get_aabb())) {
+    //         }
+    //     }
+    //     protected on_enemy_killed(): void {
+    //     }
+    // }
     function spawn_player(world, { x, y }) {
         let a = world.spawn_actor();
         let s = new qc.anim_sprite_component();
@@ -1675,14 +1768,16 @@ var qg;
         pistol.sprite = qg.g_character_spritesheet.get_sprite(18);
         qf.attach_cmp(a, new player_movement());
         qf.attach_cmp(a, new player_controller());
+        // #DEBUG-BEGIN
         let tdebug = new debug_draw_collisions();
         qf.attach_prim(a, tdebug, {});
+        // #DEBUG-END
         world.player = a;
         return a;
     }
     function spawn_tile(actor, { x, y }, id) {
         let s = qf.attach_prim(actor, new qc.sprite_component(), { x, y, width: 10, height: 10 });
-        s.sprite = qg.g_tile_spritesheet.get_sprite(90 + parseInt(id, 16));
+        s.sprite = qg.g_tile_spritesheet.get_sprite(9 * 8 + parseInt(id, 16));
     }
     function parse_level(data, world) {
         let geom = world.geometry;
@@ -1712,8 +1807,11 @@ var qg;
     qg.g_time_dilation = 1;
     function tick() {
         world.tick(0.016 * qg.g_time_dilation);
+        ctx.save();
         ctx.clearRect(0, 0, 410, 210);
+        ctx.translate(qg.g_scene_offset.x, qg.g_scene_offset.y);
         qr.render_w(ctx, world);
+        ctx.restore();
         window.requestAnimationFrame(tick);
     }
     function reset() {
@@ -1721,29 +1819,23 @@ var qg;
             console.log('score: ', qg.g_stage);
         }
         qg.g_stage = 1;
-        let t = new ql.tile_geometry(40, 20, 10);
+        let t = new ql.tile_geometry(28, 14, 14);
         world = new qf.world();
         world.geometry = t;
-        parse_level(`0000000000000000000000000000000000000000
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0        @                             0
-0      000000                          0
-0                     s                0
-0                    0000      000     0
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0             0000   00000    00000    0
-0    000 000000                        0
-0                                      0
-1111111111111111111111111111111111111111`, world);
+        parse_level(`0000000000000000000000000000
+1                          0
+1                          0
+1               s          0
+1               11         0
+1                          0
+1                          0
+1        @                 0
+1      000000     000000   0
+1      000                 0
+1      00                  0
+1      0                   0          
+1                          0
+0000000000000000000111111111`, world);
         world.has_begun_play = true;
         for (let a of world.actors)
             for (let c of a.components)
