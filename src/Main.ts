@@ -39,12 +39,16 @@ namespace qm
     export function mag_sqr(a: vec) { return a.x * a.x + a.y * a.y; }
     export function mag(a: vec) { return Math.sqrt(mag_sqr(a)); }
     export function unit(a: vec) { let m = mag(a); return scale(a, 1/m); }
-    export function clamp_mag(a: vec, min: number, max: number)
-    {
+    export function clamp_mag(a: vec, min: number, max: number) {
         let m = mag(a);
         return m < min ? scale(unit(a), min) :
                m > max ? scale(unit(a), max) :
                          a;
+    }
+    export function rotate(a: vec, rad: number): vec {
+        let c = Math.cos(rad);
+        let s = Math.sin(rad);
+        return v(c * a.x - s * a.y, s * a.x + c * a.y);
     }
     export function manhattan_dist(a: vec) { return Math.abs(a.x) + Math.abs(a.y); }
 
@@ -53,6 +57,14 @@ namespace qm
     export function eq_eps(a: number, b: number, eps = 0.01) { return Math.abs(a - b) < eps; }
     export function rnd(min = 0, max = 1) { return min + (max - min) * Math.random(); }
     export function rnd_select<T>(...elements: T[]): T { return elements[qm.rnd(0, elements.length) | 0]};
+    // The Box-Muller transform converts two independent uniform variates on (0, 1) into two standard Gaussian variates (mean 0, variance 1). 
+    export function rnd_normal() {
+        let u = 0, v = 0;
+        while (u === 0) u = Math.random(); //Converting [0,1) to (0,1)
+        while (v === 0) v = Math.random();
+        let n = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+        return qm.clamp(n/10, -1, 1);
+    }
 
     export type aabb = [vec, vec];
 
@@ -777,7 +789,7 @@ namespace qs
                        'ArrowRight' |
                        'ArrowUp' |
                        'ArrowDown' |
-                       'z' | 'x';
+                       'z' | 'x' | ' ';
 
             const state: { [key:string]: key_state } =  { };
             export function is_down(key: key) { return state[key] ? state[key].is_down : false; }
@@ -800,6 +812,7 @@ namespace qs
                 if (s.is_down) return;
                 s.is_down = true;
                 s.timestamp = Date.now();
+                e.preventDefault();
             }
 
             export function on_keyup(e: KeyboardEvent) {
@@ -1132,9 +1145,9 @@ namespace ql
                         continue;
                     }
 
-                    if (is_conn_allowed(this, start, n_loc)) {
-                        let n_id = id(n_loc);
-                        if (!qu.contains(visited, n_id)) {
+                    let n_id = id(n_loc);
+                    if (!qu.contains(visited, n_id)) {
+                        if (is_conn_allowed(this, start, n_loc)) {
                             open.push(n_loc);
                             visited.push(n_id);
                             prev.push(id(start));
@@ -1310,12 +1323,37 @@ namespace qc {
             }
         }
     }
+
+    export class explosion_component extends qf.scene_component {
+        public wants_tick = true;
+        public duration = 0.11;
+        public elpased = 0;
+        public radious = 10;
+
+        public tick(delta: number) {
+            if (this.elpased > this.duration) {
+                this.owner.destroy();
+                qg.g_scene_offset = qm.v();
+            }
+            qg.g_scene_offset.x = qm.rnd(-1, 1);
+            qg.g_scene_offset.y = qm.rnd(-1, 1);
+            this.elpased += delta;
+        }
+
+        public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radious, 0, 2*Math.PI);
+            ctx.fillStyle = this.elpased / this.duration < 0.5 ? '#000': '#fff';
+            ctx.fill();
+        }
+    }
 }
 
 // ai
 namespace qi
 {
     export var g_paths: qm.vec[][] = [];
+    export const g_on_enemy_killed = new qf.multicast_delegate<(a: qf.actor) => void>();
 
     export function flying_path_filter(geom: ql.tile_geometry, s: qm.vec, e: qm.vec): boolean {
         return !geom.is_blocking(e.x, e.y);
@@ -1342,7 +1380,7 @@ namespace qi
             // we can go straight up only near walls
             if (dir.x == 0 && e_dist > 1) return false;
             // we can keep goin up while we are near floor or walls
-            if (dir.x != 0 && s_jump > 3) return false;
+            if (dir.x != 0 && s_jump > 2) return false;
         }
         return true;
     }
@@ -1425,6 +1463,7 @@ namespace qi
             this.root = this.owner.root;
             this.owner.on_take_damage.bind(this.take_damage, this);
             this.get_timer().every(0.1, this.update, this);
+            this.get_timer().delay(0, _ => this.hitpoints += qg.g_stage, this);
         }
 
         protected update(): void {
@@ -1464,6 +1503,8 @@ namespace qi
                     }, this.target);
                 }
             }
+
+            qi.g_on_enemy_killed.broadcast(this.owner);
             this.owner.destroy();
         }
 
@@ -1567,7 +1608,7 @@ namespace qi
         r.sequences['idle'] = new qr.sprite_sequence(qg.g_character_spritesheet, [4, 5], [.12, .12]);
         r.sequences['idle'].loop = true; 
         r.play('idle');
-        r.offset.y -= 4;
+        r.offset.y -= 3;
     
         qf.attach_cmp(a, new ai_movement());
         qf.attach_cmp(a, new slime_ai());
@@ -1603,8 +1644,9 @@ namespace qg
     export const g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
     export const g_negative_spritesheet_image = qr.create_canvas(128, 128);
     export const g_character_spritesheet = new qr.spritesheet(g_spritesheet_image, g_negative_spritesheet_image, qm.v(14, 18), qm.v(9, 9));
-    export const g_tile_spritesheet = new qr.spritesheet(g_spritesheet_image, g_negative_spritesheet_image, qm.v(10, 10), qm.v(10, 10));
+    export const g_tile_spritesheet = new qr.spritesheet(g_spritesheet_image, g_negative_spritesheet_image, qm.v(14, 14), qm.v(9, 10));
     export var g_stage = 1;
+    export var g_scene_offset = qm.v();
 
     /**
      *  SPAWN METHODS
@@ -1631,6 +1673,13 @@ namespace qg
         return a;
     }
 
+    export function spawn_explosion(world: qf.world, {x, y, radious = 15}): qf.actor {
+        let a = world.spawn_actor();
+        let e = qf.attach_prim(a, new qc.explosion_component(), {x, y});
+        e.radious = (qm.rnd_normal() + 1) * radious;
+        return a;
+    }
+
     class player_movement extends qc.character_movement
     {
         public process_input() {
@@ -1638,23 +1687,28 @@ namespace qg
 
             this.acc.x = 0;
             this.acc.y = 0;
-            const move_left = qs.input.keyboard.is_down('ArrowLeft');
-            const move_right = qs.input.keyboard.is_down('ArrowRight');
+
+            let k = qs.input.keyboard;
+            const move_left = k.is_down('ArrowLeft');
+            const move_right = k.is_down('ArrowRight');
+            const jump =  k.just_pressed('ArrowUp') || k.just_pressed(' ');
 
             if (move_left) {
-                this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
+                // this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
+                this.acc.x = -speed;
                 this.moving_left = true;
             }
             else if (move_right) {
-                this.acc.x = speed * (this.on_ground ? 1 : 0.5);
+                // this.acc.x = speed * (this.on_ground ? 1 : 0.5);
+                this.acc.x = speed;
                 this.moving_left = false;
             }
             else if (this.on_ground)
             {
-                this.vel.x *= 0.6;
+                this.vel.x *= 0.4;
             }
 
-            if (qs.input.keyboard.just_pressed('ArrowUp', 100)) {
+            if (jump) {
                 if (this.on_ground) {
                     this.acc.y = -speed * 100;
                 }
@@ -1713,6 +1767,10 @@ namespace qg
                 if (hit.actor) {
                     hit.actor.on_take_damage.broadcast(new qf.damage_event(this.damage, this.instigator, hit.normal));
                 }
+                
+                if (qm.rnd() > 0.8)
+                    qg.spawn_explosion(this.get_world(), hit.pos);
+
             }, this);
         }
 
@@ -1878,26 +1936,35 @@ namespace qg
         private movement: player_movement;
         private sprite: qc.anim_sprite_component;
         private weapon_sprite: qc.sprite_component;
-        private z_press_start = -1;
-        private last_fire_time = 0;
-        private fire_delegate: Function;
+
+        public bullet_speed = 300;
+        public fire_spread = 5;
+        public bullets_per_shoot = 1;
         public wants_tick = true;
+
+        protected fire_rate = 4;
+        protected fire_delegate: Function;
 
         public begin_play()
         {
             [this.movement] = this.owner.getcmp(player_movement);
             [this.sprite]   = this.owner.getcmp(qc.anim_sprite_component);
             [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite') as qc.sprite_component[];
-            this.fire_delegate = this.get_world().timer.throttle(0.15, this.fire, this);
             this.owner.on_take_damage.bind(this.take_damage, this);
+            this.set_fire_rate(this.fire_rate);
 
-            // this.get_timer().every(4, _ => {
-            //     if (qm.rnd() > 0.2) {
-            //         qi.spawn_humanoid(this.get_world(), {x: 30, y: 40});
-            //     } else {
-            //         qi.spawn_slime(this.get_world(), {x:100, y:40});
-            //     }
-            // }, this);
+            let counter = 0;
+            qi.g_on_enemy_killed.bind(a => {
+                counter += 1;
+
+                this.set_fire_rate(4 + counter / 4);
+                this.bullet_speed = qm.clamp(this.bullet_speed + 10,  10, 1000);
+
+                if (this.bullets_per_shoot < 10 && counter % 5 == 0) {
+                    this.bullets_per_shoot += 1;
+                }
+
+            }, this);
         }
 
         public tick(delta: number): void
@@ -1963,16 +2030,55 @@ namespace qg
             reset();
         }
 
+        public set_fire_rate(rate: number): void {
+            this.fire_delegate = this.get_timer().throttle(1/qm.clamp(rate, 0.5, 1000), this.fire, this);
+        }
+
         protected fire(): void {
             let a = this.owner;
-            let dir = this.movement.moving_left ? qm.left : qm.right;
-            dir = qm.scale(dir, 400);
-            spawn_projectile(a.world, this.weapon_sprite.get_pos(), dir, this.owner, 
-                {lifespan: 0.3, gravity: 0, cc: qf.cc.pawn | qf.cc.geom});
-            this.movement.vel.x += dir.x * -0.1;
+            let ml = this.movement.moving_left;
+
+            let dir = ml ? qm.left: qm.right;
+            let angle = qm.clamp((this.bullets_per_shoot - 1) * 0.087, 0, 0.785) * dir.x;
+            let step = 0;
+            if (this.bullets_per_shoot > 1) {
+                step = (2 * angle) / (this.bullets_per_shoot - 1)
+            }
+            dir = qm.rotate(dir, -angle);
+
+            for (let i = 0; i < this.bullets_per_shoot; ++i)
+            {
+                spawn_projectile(a.world, this.weapon_sprite.get_pos(), 
+                    qm.scale(dir, this.bullet_speed), this.owner,
+                    { lifespan: 0.3, gravity: 0, cc: qf.cc.pawn | qf.cc.geom });
+                dir = qm.rotate(dir, step);
+            }
+            
+            if (this.movement.on_ground)
+                this.movement.vel.x += dir.x * -0.1;
+
             this.weapon_sprite.rot = this.movement.moving_left ? 3.14/2 :-3.14/2;
         }
     }
+
+    // class buff_spawner extends qf.component_base {
+    //     protected enabled = false;
+
+    //     public begin_play(): void {
+    //         qi.g_on_enemy_killed.bind(this.on_enemy_killed, this);
+    //     }
+
+    //     public tick(delta: number) {
+    //         if (!this.enabled) return;
+    //         if (qm.overlap_aabb(this.owner.root.get_aabb(), this.get_world().player.root.get_aabb())) {
+
+    //         }
+    //     }
+
+    //     protected on_enemy_killed(): void {
+
+    //     }
+    // }
 
     function spawn_player(world: qf.world, {x, y}): qf.actor {
         let a = world.spawn_actor();
@@ -2011,7 +2117,7 @@ namespace qg
 
     function spawn_tile(actor: qf.actor, {x, y}, id: string) {
         let s = qf.attach_prim(actor, new qc.sprite_component(), {x, y, width: 10, height: 10});
-        s.sprite = g_tile_spritesheet.get_sprite(90 + parseInt(id, 16));
+        s.sprite = g_tile_spritesheet.get_sprite(9*8 + parseInt(id, 16));
     }
 
     function parse_level(data: string, world: qf.world): void
@@ -2046,8 +2152,13 @@ namespace qg
     function tick()
     {
         world.tick(0.016 * g_time_dilation);
+        ctx.save()
         ctx.clearRect(0, 0, 410, 210);
+        ctx.translate(g_scene_offset.x, g_scene_offset.y);
+
         qr.render_w(ctx, world);
+
+        ctx.restore();
         window.requestAnimationFrame(tick);
     }
 
@@ -2057,33 +2168,27 @@ namespace qg
         }
         g_stage = 1;
         
-        let t = new ql.tile_geometry(40, 20, 10);
+        let t = new ql.tile_geometry(28, 14, 14);
 
         world = new qf.world();
         world.geometry = t;
 
 
         parse_level(
-`0000000000000000000000000000000000000000
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0        @                             0
-0      000000                          0
-0                     s                0
-0                    0000      000     0
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0                                      0
-0             0000   00000    00000    0
-0    000 000000                        0
-0                                      0
-1111111111111111111111111111111111111111`
+`0000000000000000000000000000
+1                          0
+1                          0
+1               s          0
+1               11         0
+1                          0
+1                          0
+1        @                 0
+1      000000     000000   0
+1      000                 0
+1      00                  0
+1      0                   0          
+1                          0
+0000000000000000000111111111`
                     , world)
 
 
