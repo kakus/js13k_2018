@@ -688,6 +688,7 @@ var qs;
                     return;
                 s.is_down = true;
                 s.timestamp = Date.now();
+                e.preventDefault();
             }
             keyboard.on_keydown = on_keydown;
             function on_keyup(e) {
@@ -961,9 +962,9 @@ var ql;
                     if (!this.is_valid(n_loc)) {
                         continue;
                     }
-                    if (is_conn_allowed(this, start, n_loc)) {
-                        let n_id = id(n_loc);
-                        if (!qu.contains(visited, n_id)) {
+                    let n_id = id(n_loc);
+                    if (!qu.contains(visited, n_id)) {
+                        if (is_conn_allowed(this, start, n_loc)) {
                             open.push(n_loc);
                             visited.push(n_id);
                             prev.push(id(start));
@@ -1135,8 +1136,8 @@ var qc;
                 this.owner.destroy();
                 qg.g_scene_offset = qm.v();
             }
-            qg.g_scene_offset.x = qm.rnd(-2, 2);
-            qg.g_scene_offset.y = qm.rnd(-2, 2);
+            qg.g_scene_offset.x = qm.rnd(-1, 1);
+            qg.g_scene_offset.y = qm.rnd(-1, 1);
             this.elpased += delta;
         }
         render_c2d_impl(ctx) {
@@ -1249,6 +1250,7 @@ var qi;
             this.root = this.owner.root;
             this.owner.on_take_damage.bind(this.take_damage, this);
             this.get_timer().every(0.1, this.update, this);
+            this.get_timer().delay(0, _ => this.hitpoints += qg.g_stage, this);
         }
         update() {
             if (this.mov && this.spr) {
@@ -1371,7 +1373,7 @@ var qi;
         r.sequences['idle'] = new qr.sprite_sequence(qg.g_character_spritesheet, [4, 5], [.12, .12]);
         r.sequences['idle'].loop = true;
         r.play('idle');
-        r.offset.y -= 4;
+        r.offset.y -= 3;
         qf.attach_cmp(a, new ai_movement());
         qf.attach_cmp(a, new slime_ai());
         return a;
@@ -1441,8 +1443,10 @@ var qg;
             const speed = 900;
             this.acc.x = 0;
             this.acc.y = 0;
-            const move_left = qs.input.keyboard.is_down('ArrowLeft');
-            const move_right = qs.input.keyboard.is_down('ArrowRight');
+            let k = qs.input.keyboard;
+            const move_left = k.is_down('ArrowLeft');
+            const move_right = k.is_down('ArrowRight');
+            const jump = k.just_pressed('ArrowUp') || k.just_pressed(' ');
             if (move_left) {
                 // this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
                 this.acc.x = -speed;
@@ -1456,7 +1460,7 @@ var qg;
             else if (this.on_ground) {
                 this.vel.x *= 0.4;
             }
-            if (qs.input.keyboard.just_pressed('ArrowUp', 100)) {
+            if (jump) {
                 if (this.on_ground) {
                     this.acc.y = -speed * 100;
                 }
@@ -1646,7 +1650,7 @@ var qg;
             this.fire_spread = 5;
             this.bullets_per_shoot = 1;
             this.wants_tick = true;
-            this.fire_rate = 5;
+            this.fire_rate = 4;
         }
         begin_play() {
             [this.movement] = this.owner.getcmp(player_movement);
@@ -1657,9 +1661,9 @@ var qg;
             let counter = 0;
             qi.g_on_enemy_killed.bind(a => {
                 counter += 1;
-                this.set_fire_rate(5 + counter / 2);
+                this.set_fire_rate(4 + counter / 4);
                 this.bullet_speed = qm.clamp(this.bullet_speed + 10, 10, 1000);
-                if (this.bullets_per_shoot < 10 && counter % 4 == 0) {
+                if (this.bullets_per_shoot < 10 && counter % 5 == 0) {
                     this.bullets_per_shoot += 1;
                 }
             }, this);
