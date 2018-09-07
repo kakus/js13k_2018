@@ -1181,7 +1181,7 @@ namespace __ {
     }
 
 // components
-    class qc_character_movement extends qf_component_base {
+    abstract class qc_character_movement extends qf_component_base {
         // setup
         // any axis
         public max_velocity = 300;
@@ -1189,6 +1189,7 @@ namespace __ {
         public max_velocity_on_ground = 100;
         public gravity = 1000;
         public bounce_off_wall = false;
+        public do_proces_input = true;
 
         // runtime data
         public vel = v2();
@@ -1212,7 +1213,13 @@ namespace __ {
             return g.sweep_aabb(r.pos, qm_add(r.pos, qm_down), r.bounds);
         }
 
+        public abstract process_input(): void;
+
         public tick(delta: number) {
+            if (this.do_proces_input) {
+                this.process_input();
+            }
+
             let r = this.owner.root;
             let g = this.owner.world.geometry as qf_tile_geometry;
 
@@ -1220,7 +1227,9 @@ namespace __ {
             this.vel = qm_add(this.vel, qm_scale(this.acc, delta));
 
             this.vel = qm_clamp_mag(this.vel, 0, this.max_velocity);
-            this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
+            // if (this.on_ground) {
+                this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
+            // }
 
             let end = qm_add(r.pos, qm_scale(this.vel, delta));
             let trace = g.sweep_aabb(r.pos, end, r.bounds);
@@ -1237,7 +1246,7 @@ namespace __ {
                             end.x = x_trace[0].x;
                         }
                     }
-                    this.vel.y = 0;
+                    this.vel.y *= this.bounce_off_wall ? -qm_rnd(0.2, 0.5) : 0;
                 }
                 if (n.x != 0) {
                     end.x = p.x
@@ -1248,7 +1257,8 @@ namespace __ {
                         }
                     }
 
-                    this.vel.x *= this.bounce_off_wall ? -qm_rnd(0.5, 0.7) : 0;
+                    this.vel.x *= this.bounce_off_wall ? -qm_rnd(0.2, 0.5) : 0;
+                    // this.vel = qm_scale(this.vel, this.bounce_off_wall ? - qm_rnd(0.5, 0.7) : 0);
                 }
             }
             // else {
@@ -1340,6 +1350,71 @@ namespace __ {
         }
     }
 
+    class qc_wave_component extends qf_scene_component {
+        public wants_tick = true;
+        public start_radious = 0;
+        public end_radious = 1000;
+        public expand_durtation = 0.5;
+        public slomo_duration = 0.1;
+        protected elapsed = 0;
+
+        public begin_play(): void {
+            // g_time_dilation = 0.1;
+            // this.get_timer().delay(this.slomo_duration, _ => g_time_dilation = 1, this);
+
+            let w = this.get_world();
+            let t = this.get_timer();
+
+            for (let a of w.actors) {
+                let m = a.getcmp(qi_ai_movement)[0];
+                if (a.root && m) {
+
+                    let dir = qm_sub(a.get_pos(), this.pos);
+                    let mag = qm_mag(dir);
+                    dir = qm_scale(qm_unit(dir), 300 * (30 / mag));
+                    m.vel = dir;
+
+                    m.do_proces_input = false;
+                    let b = m.bounce_off_wall;
+                    let ms = m.max_velocity;
+                    m.bounce_off_wall = true;
+                    m.max_velocity = 9000;
+
+                    t.delay(1, _ => { 
+                        m.do_proces_input = true;
+                        m.bounce_off_wall = b;
+                        m.max_velocity = ms;
+                    }, a);
+                }
+            }
+        }
+
+        public tick(delta: number): void {
+            const hs = this.slomo_duration / 1.1;
+            g_time_dilation = qm_clamp(1 - this.elapsed / hs, 0.01, 1);
+
+            this.elapsed += delta;
+
+            if (this.elapsed > this.slomo_duration) {
+                g_time_dilation = 1;
+                this.owner.destroy();
+            }
+        }
+
+        public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
+            let a = qm_clamp(this.elapsed / this.expand_durtation, 0, 1);
+            ctx.beginPath();
+            ctx.arc(0, 0, this.start_radious + (this.end_radious - this.start_radious) * a, 0, 2*Math.PI);
+
+            let gco = ctx.globalCompositeOperation;
+            ctx.globalCompositeOperation = 'difference';
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.globalCompositeOperation = gco;
+        }
+    }
+
     class qc_pickable_component extends qf_component_base {
 
         public activate_delegate: Function;
@@ -1403,8 +1478,13 @@ namespace __ {
         // runtime
         public input = v2();
 
-        public tick(delta: number)
-        {
+        public process_input() {
+
+            if (this.flying) {
+                this.acc = qm_scale(this.input, this.air_acc);
+                return;
+            }
+
             if (this.input.x != 0) {
                 if (this.on_ground) {
                     this.acc.x = this.input.x * this.ground_acc;
@@ -1416,7 +1496,7 @@ namespace __ {
                 this.vel.x *= 0.8;
             }
 
-            if (this.input.y < 0 && !this.flying) {
+            if (this.input.y < 0) {
                 let wall_hit = this.trace_wall(3);
                 if (this.on_ground && !wall_hit) {
                     this.vel.y = -this.jump_vel;
@@ -1433,14 +1513,9 @@ namespace __ {
                     }
                 }
             }
-            else if (this.flying) {
-                this.acc.y = this.air_acc * this.input.y;
-            }
             else {
                 this.acc.y = 0;
             }
-            
-            super.tick(delta);
         }
     }
 
@@ -1676,7 +1751,7 @@ namespace __ {
         let mov = qf_attach_cmp(a, new qi_ai_movement());
         mov.gravity = 0;
         mov.flying = true; 
-        mov.bounce_off_wall = true;
+        // mov.bounce_off_wall = true;
         mov.air_acc = 100;
 
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
@@ -1699,6 +1774,12 @@ namespace __ {
         let p = qf_attach_cmp(a, new qc_pickable_component());
         p.activate_delegate = _ => a.destroy();
 
+        return a;
+    }
+
+    function spawn_freeze_wave(world: qf_world, {x, y}): qf_actor {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_wave_component(), {x, y, root: true});
         return a;
     }
 
@@ -1771,6 +1852,7 @@ namespace __ {
 
         public tick(delta: number)
         {
+            delta = delta * 1/g_time_dilation;
             this.process_input();
             super.tick(delta);
         }
@@ -2067,7 +2149,9 @@ namespace __ {
         protected take_damage(e: qf_damage_event): void {
             this.movement.vel.x += e.dir.x * 100;
             this.movement.vel.y -= 100;
-            this.sprite.blink();
+            // this.sprite.blink();
+            spawn_freeze_wave(this.get_world(), this.owner.get_pos());
+
 
             // reset();
         }
@@ -2077,6 +2161,7 @@ namespace __ {
         }
 
         protected fire(): void {
+
             let a = this.owner;
             let ml = this.movement.moving_left;
 
