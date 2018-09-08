@@ -1693,7 +1693,7 @@ namespace g {
         public trace_ground(): qm_line_trace_result {
             let r = this.owner.root;
             let g = this.owner.world.geometry as qf_tile_geometry;
-            return g.sweep_aabb(r.pos, qm_add(r.pos, qm_down), r.bounds);
+            return g.sweep_aabb(r.pos, qm_add(r.pos, v2(0, 5)), r.bounds);
         }
 
         public abstract process_input(): void;
@@ -2121,7 +2121,7 @@ namespace g {
             this.set_fire_rate(this.fire_rate);
 
             // #DEBUG-BEGIN
-            qs_input.keyboard.bind_keydown('1', _ => qm_rnd_select(spawn_bat, spawn_humanoid)(world, v2(30, 30)), this);
+            qs_input.keyboard.bind_keydown('1', _ => qm_rnd_select(spawn_bat, spawn_humanoid)(g_world, v2(30, 30)), this);
             qs_input.keyboard.bind_keydown('2', _ => reset(), this);
             // #DEBUG-END
         }
@@ -2607,9 +2607,9 @@ namespace g {
 
         let item_type = qm_rnd(0, qg_item_type.max_none)|0 as qg_item_type;
 
-        let l = qf_attach_prim(a, new qc_label_component(), {y: -40, x: -16});
+        let l = qf_attach_prim(a, new qc_label_component(), {y: -40, x: -26});
         l.parent = s;
-        l.text = get_item_desc(item_type) + '\ncost: ' + get_item_cost(item_type).toFixed(0);
+        l.text = get_item_desc(item_type) + '\n      cost: ' + get_item_cost(item_type).toFixed(0);
         l.visible = false;
 
         let p = qf_attach_cmp(a, new qc_pickable_component());
@@ -2620,6 +2620,7 @@ namespace g {
         p2.bounds = [v2(x, y - 40), v2(10, 10)];
         p2.on_overlap_begins.bind(_ => {
             spawn_freeze_wave(world, {x, y});
+            world.player.getcmp(qc_player_controller)[0].apply_upgrade(item_type);
             a.destroy()
         }, p2);
 
@@ -2886,60 +2887,64 @@ namespace g {
         }
     }
 
-    let world: qf_world;
-    let ctx: CanvasRenderingContext2D;
+    let g_world: qf_world;
+    let g_context: CanvasRenderingContext2D;
+    let g_canvas: HTMLCanvasElement;
     export var g_time_dilation = 1;
 
     function tick()
     {
-        world.tick(0.016 * g_time_dilation);
-        ctx.save()
-        ctx.clearRect(0, 0, 410, 210);
-        ctx.translate(g_scene_offset.x, g_scene_offset.y);
+        g_world.tick(0.016 * g_time_dilation);
+        g_context.save()
+        g_context.clearRect(0, 0, g_canvas.width, g_canvas.height);
+        g_context.translate(g_scene_offset.x, g_scene_offset.y);
 
-        qr_render_w(ctx, world);
+        qr_render_w(g_context, g_world);
 
-        ctx.restore();
+        g_context.restore();
         window.requestAnimationFrame(tick);
     }
 
     function reset() {
-        if (world) {
+        if (g_world) {
             console.log('score: ', g_stage);
         }
         g_stage = 1;
         
-        let t = new qf_tile_geometry(28, 14, 14);
+        let t = new qf_tile_geometry(35, 18, 14);
 
-        world = new qf_world();
-        world.geometry = t;
+        g_world = new qf_world();
+        g_world.geometry = t;
 
 
         parse_level(
-`0000000000000000000000000000
-1                          0
-1                          0
-1                          0
-1               11         0
-1                          0
-1                          0
-1        @  i   i   i      0
-1      00000000000000000   0
-1      000                 0
-1      00                  0
-1      0                   0          
-1                  i       0
-0000000000000000000111111111`
-                    , world)
+`00000000000000000000000000000000000
+1                                 0
+1                                 0
+1                                 0
+1               11                0
+1                                 0
+1                                 0
+1        @  i   i   i             0
+1      00000000000000000          0
+1      000                        0
+1      00                         0
+1      0                          0
+1      0               01010110   0
+1      0                          0
+1      0      010101              0
+1      0                          0
+1                  i              0
+00000000000000000001111111111111111`
+                    , g_world)
     }
 
     function main()
     {
-        let canvas: HTMLCanvasElement = document.querySelector("#canvas");
-        ctx = canvas.getContext("2d");
-        ctx['imageSmoothingEnabled'] = false;
-        ctx.scale(2, 2);
-        ctx.translate(5.5, 5.5);
+        g_canvas  = document.querySelector("#canvas");
+        g_context = g_canvas.getContext("2d");
+        g_context['imageSmoothingEnabled'] = false;
+        g_context.scale(2, 2);
 
         { 
             let c = g_negative_spritesheet_image.getContext('2d');
@@ -2954,7 +2959,7 @@ namespace g {
 
         reset();
 
-        qs_input.init(canvas);
+        qs_input.init(g_canvas);
         window.requestAnimationFrame(tick);
     }
 
