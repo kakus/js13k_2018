@@ -639,6 +639,402 @@ namespace g {
     }
 
 // render
+	let qr_pixel_font_data = {
+		
+		char: {
+			width: 3,
+			height: 5
+		},
+	
+		letters: {
+			
+			'+': [
+				0, 0, 0,
+				0, 1, 0,
+				1, 1, 1,
+				0, 1, 0,
+				0, 0, 0
+			],
+			
+			'-': [
+				0, 0, 0,
+				0, 0, 0,
+				1, 1, 1,
+				0, 0, 0,
+				0, 0, 0
+			],
+			
+			'.': [
+				0, 0, 0,
+				0, 0, 0,
+				0, 0, 0,
+				0, 0, 0,
+				0, 1, 0
+			],
+			
+			',': [
+				0, 0, 0,
+				0, 0, 0,
+				0, 0, 0,
+				0, 1, 0,
+				1, 0, 0
+			],
+			
+			':': [
+				0, 0, 0,
+				0, 1, 0,
+				0, 0, 0,
+				0, 1, 0,
+				0, 0, 0
+			],
+			
+			'?': [
+				1, 1, 0,
+				0, 0, 1,
+				0, 1, 1,
+				0, 0, 0,
+				0, 1, 0
+			],
+			
+			'♥': [
+				1, 0, 1,
+				1, 1, 1,
+				1, 1, 1,
+				0, 1, 0,
+				0, 0, 0
+			],
+			
+			
+			'0': [
+				1, 1, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 1
+			],
+			
+			'1': [
+				0, 1, 0,
+				1, 1, 0,
+				0, 1, 0,
+				0, 1, 0,
+				0, 1, 0
+			],
+			
+			'2': [
+				1, 1, 1,
+				0, 0, 1,
+				1, 1, 1,
+				1, 0, 0,
+				1, 1, 1
+			],
+			
+			'3': [
+				1, 1, 1,
+				0, 0, 1,
+				0, 1, 1,
+				0, 0, 1,
+				1, 1, 1
+			],
+			
+			'4': [
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 1,
+				0, 0, 1,
+				0, 0, 1
+			],
+			
+			'5': [
+				1, 1, 1,
+				1, 0, 0,
+				1, 1, 1,
+				0, 0, 1,
+				1, 1, 0
+			],
+			
+			'6': [
+				0, 1, 1,
+				1, 0, 0,
+				1, 1, 1,
+				1, 0, 1,
+				1, 1, 1
+			],
+			
+			'7': [
+				1, 1, 1,
+				0, 0, 1,
+				0, 1, 0,
+				0, 1, 0,
+				0, 1, 0
+			],
+			
+			'8': [
+				1, 1, 1,
+				1, 0, 1,
+				1, 1, 1,
+				1, 0, 1,
+				1, 1, 1
+			],
+			
+			'9': [
+				1, 1, 1,
+				1, 0, 1,
+				1, 1, 1,
+				0, 0, 1,
+				1, 1, 0
+			],
+			
+			'A': [
+				0, 1, 0,
+				1, 0, 1,
+				1, 1, 1,
+				1, 0, 1,
+				1, 0, 1
+			],
+			
+			'B': [
+				1, 1, 0,
+				1, 0, 1,
+				1, 1, 0,
+				1, 0, 1,
+				1, 1, 0
+			],
+			
+			'C': [
+				1, 1, 1,
+				1, 0, 0,
+				1, 0, 0,
+				1, 0, 0,
+				1, 1, 1
+			],
+			
+			'D': [
+				1, 1, 0,
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 0
+			],
+			
+			'E': [
+				1, 1, 1,
+				1, 0, 0,
+				1, 1, 0,
+				1, 0, 0,
+				1, 1, 1
+			],
+			
+			'F': [
+				1, 1, 1,
+				1, 0, 0,
+				1, 1, 0,
+				1, 0, 0,
+				1, 0, 0
+			],
+			
+			'G': [
+				1, 1, 1,
+				1, 0, 0,
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 1
+			],
+			
+			'H': [
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 1,
+				1, 0, 1,
+				1, 0, 1
+			],
+			
+			'I': [
+				0, 1, 0,
+				0, 1, 0,
+				0, 1, 0,
+				0, 1, 0,
+				0, 1, 0
+			],
+			
+			'J': [
+				1, 1, 1,
+				0, 1, 0,
+				0, 1, 0,
+				0, 1, 0,
+				1, 0, 0
+			],
+			
+			'K': [
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 0,
+				1, 0, 1,
+				1, 0, 1
+			],
+			
+			'L': [
+				1, 0, 0,
+				1, 0, 0,
+				1, 0, 0,
+				1, 0, 0,
+				1, 1, 1
+			],
+			
+			
+			'N': [
+				0, 0, 1,
+				1, 0, 1,
+				1, 1, 1,
+				1, 0, 1,
+				1, 0, 0
+			],
+			
+			'M': [
+				1, 0, 1,
+				1, 1, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1
+			],
+			
+			'O': [
+				1, 1, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 1
+			],
+			
+			'P': [
+				1, 1, 1,
+				1, 0, 1,
+				1, 1, 1,
+				1, 0, 0,
+				1, 0, 0
+			],
+			
+			'Q': [
+				1, 1, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 0,
+				0, 0, 1
+			],
+			
+			'R': [
+				1, 1, 0,
+				1, 0, 1,
+				1, 1, 0,
+				1, 0, 1,
+				1, 0, 1
+			],
+			
+			'S': [
+				1, 1, 1,
+				1, 0, 0,
+				1, 1, 0,
+				0, 0, 1,
+				1, 1, 1
+			],
+			
+			'T': [
+				1, 1, 1,
+				0, 1, 0,
+				0, 1, 0,
+				0, 1, 0,
+				0, 1, 0
+			],
+			
+			'U': [
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 1
+			],
+			
+			'W': [
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 1, 1,
+				1, 0, 1
+			],
+			
+			'V': [
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				0, 1, 0
+			],
+			
+			'X': [
+				1, 0, 1,
+				1, 0, 1,
+				0, 1, 0,
+				1, 0, 1,
+				1, 0, 1
+			],
+			
+			'Y': [
+				1, 0, 1,
+				1, 0, 1,
+				1, 0, 1,
+				0, 1, 0,
+				0, 1, 0
+			]
+		},
+    };
+
+    class qr_font_bitmap {
+        readonly bitmap: HTMLCanvasElement;
+        readonly char_offset: {[letter:string]: number} = {};
+        readonly char_width: number;
+        readonly char_height: number;
+
+        constructor() {
+            let f = qr_pixel_font_data;
+            let w = this.char_width = f.char.width;
+            let h = this.char_height = f.char.height;
+            let n = Object.keys(f.letters).length;
+
+            let render_letter = (ctx: CanvasRenderingContext2D, letter: string) => {
+                for (let x = 0; x < w; ++x) {
+                    for (let y = 0; y < h; ++y) {
+                        let dot = f.letters[letter][y * w + x];
+                        if (dot) ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            };
+
+            this.bitmap = qr_create_canvas(w * n, h, ctx => {
+                ctx.fillStyle = '#fff';
+                let offset_x = 0;
+                for (let l in f.letters) {
+                    render_letter(ctx, l);
+                    this.char_offset[l] = offset_x;
+                    offset_x += w;
+                    ctx.translate(w, 0);
+                }
+            });
+        }
+    }
+
+    function qr_render_string(f: qr_font_bitmap, ctx: CanvasRenderingContext2D, text: string, pos = v2()): void {
+        let x = 0;
+        for (let l of text.toUpperCase()) {
+            ctx.drawImage(f.bitmap,
+                f.char_offset[l], 0, f.char_width, f.char_height,
+                x + pos.x, pos.y, f.char_width, f.char_height);
+            x += f.char_width + 1;
+        }
+    }
+
+    const qr_pixel_font = new qr_font_bitmap();
+
+
     function qr_create_canvas(width: number, height: number, cb?: (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => void): HTMLCanvasElement {
         let c = document.createElement('canvas');
         c.width = width;
@@ -1690,7 +2086,7 @@ namespace g {
             this.think_event.fire_in = 0.5 * this.dimishing_return;
             this.mov.input = v2();
             this.mov.vel.x -= 200 * e.dir.x * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
-            this.mov.vel.y -= 160 * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
+            this.mov.vel.y -= 160 * this.dimishing_return * (this.mov.flying ? 0 : 1);
 
             this.dimishing_return = qm_clamp(this.dimishing_return - 0.1, 0, 1);
             super.take_damage(e);
@@ -1941,6 +2337,8 @@ namespace g {
 
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void
         {
+            qr_render_string(qr_pixel_font ,ctx, 'hallo0231?', v2(20, 30));
+
             const tl = this.tiles.tile_size;
             ctx.strokeStyle = 'white';
             ctx.fillStyle = 'red';
