@@ -993,7 +993,6 @@ namespace g {
                 let f = y => Math.floor(((y * ts - b) / a) / ts);
 
                 let increasing = a > 0;
-                let i = 0;
                 let x = f(y + (increasing ? 0 : 1))
                 let x_end = f(y + (increasing ? 1 : 0));
 
@@ -1009,12 +1008,8 @@ namespace g {
                 for (;;)
                 {
                     if (fn(x, y)) return;
-
-                    if (++i > 100) break;
                     if (x == x_end) break;
-
-                    if (d.x > 0) ++x; 
-                    else --x;
+                    x += d.x > 0 ? 1 : -1;
                 }
 
                 if (y != e.y) y += Math.sign(d.y);
@@ -1226,11 +1221,7 @@ namespace g {
 
             this.vel.y += this.gravity * delta;
             this.vel = qm_add(this.vel, qm_scale(this.acc, delta));
-
             this.vel = qm_clamp_mag(this.vel, 0, this.max_velocity);
-            // if (this.on_ground) {
-                // this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
-            // }
 
             let end = qm_add(r.pos, qm_scale(this.vel, delta));
             let trace = g.sweep_aabb(r.pos, end, r.bounds);
@@ -1259,15 +1250,11 @@ namespace g {
                     }
 
                     this.vel.x *= this.bounce_off_wall ? -qm_rnd(0.2, 0.5) : 0;
-                    // this.vel = qm_scale(this.vel, this.bounce_off_wall ? - qm_rnd(0.5, 0.7) : 0);
                 }
             }
-            // else {
-                // r.pos.x = Math.round(end.x);
-                r.pos.x = end.x;
-                r.pos.y = end.y;
-                // r.pos = end;
-            // }
+
+            r.pos.x = end.x;
+            r.pos.y = end.y;
 
             this.on_ground = !!this.trace_ground();
         }
@@ -1485,7 +1472,7 @@ namespace g {
     {
         // setup
         public ground_acc = 500;
-        public air_acc  = 100;
+        public air_acc  = 500;
         public jump_vel = 300;
         public flying = false;
 
@@ -1605,9 +1592,9 @@ namespace g {
                 }
             }
 
-            if (g_time_dilation < 1) {
-                spawn_freeze_wave(w, this.owner.get_pos());
-            }
+            // if (g_time_dilation < 1) {
+            //     spawn_freeze_wave(w, this.owner.get_pos());
+            // }
 
             qi_g_on_enemy_killed.broadcast(this.owner);
             this.owner.destroy();
@@ -1766,7 +1753,8 @@ namespace g {
         mov.gravity = 0;
         mov.flying = true; 
         // mov.bounce_off_wall = true;
-        mov.air_acc = 100;
+        // mov.air_acc = 100;
+        mov.max_velocity = 100;
 
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
         h.hitpoints = 4;
