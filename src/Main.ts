@@ -1,4 +1,4 @@
-namespace __ {
+namespace g {
 // math
     class qm_vec { 
         constructor(
@@ -332,6 +332,7 @@ namespace __ {
         public owner: qf_actor;
         public name = '';
         public wants_tick = false;
+        public received_begin_play = false;
 
         public begin_play(): void { }
         public get_world() { return this.owner.world; }
@@ -447,9 +448,6 @@ namespace __ {
         cmp.owner = owner;
         cmp.name = name;
         owner.components.push(cmp);
-        if (owner.world.has_begun_play) {
-            cmp.begin_play();
-        }
         return cmp;
     }
 
@@ -472,7 +470,6 @@ namespace __ {
         public geometry: qf_tile_geometry;
         public player: qf_actor;
         public timer = new qf_timer();
-        public has_begun_play = false;
 
         public tick(delta: number)
         {
@@ -480,6 +477,10 @@ namespace __ {
 
             for (let actor of this.actors) {
                 for (let cmp of actor.components) {
+                    if (!cmp.received_begin_play) {
+                        cmp.begin_play();
+                        cmp.received_begin_play = true;
+                    }
                     if (qf_has_tick_method(cmp)) {
                         cmp.tick(delta);
                     }
@@ -533,14 +534,14 @@ namespace __ {
                 }
                 if (actor.root) {
                     let actor_aabb = actor.root.get_aabb(half_size);
-                    // if ((actor.root.collision_mask & channel) && qm_overlap_aabb(area, actor_aabb)) {
-                    if (actor.root.collision_mask & channel) {
+                    if ((actor.root.collision_mask & channel) && qm_overlap_aabb(area, actor_aabb)) {
                         let hit = qm_line_trace_aabb(start, end, actor_aabb);
                         if (hit) {
                             hits.push(new qf_hit_result(hit[0], hit[1], actor));
+                        } else {
+                            hits.push(new qf_hit_result(start, qm_unit(qm_sub(start, end)), actor));
                         }
                     }
-                    // }
                 }
             }
 
@@ -1228,7 +1229,7 @@ namespace __ {
 
             this.vel = qm_clamp_mag(this.vel, 0, this.max_velocity);
             // if (this.on_ground) {
-                this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
+                // this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
             // }
 
             let end = qm_add(r.pos, qm_scale(this.vel, delta));
@@ -1343,19 +1344,26 @@ namespace __ {
         }
 
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
+            let alpha = this.elpased / this.duration;
+            let gco = ctx.globalCompositeOperation;
+
+            if (alpha > 0.5) {
+                ctx.globalCompositeOperation = 'difference';
+            }
             ctx.beginPath();
             ctx.arc(0, 0, this.radious, 0, 2*Math.PI);
-            ctx.fillStyle = this.elpased / this.duration < 0.5 ? '#000': '#fff';
+            ctx.fillStyle =  alpha < 0.5 ? '#000': '#fff';
             ctx.fill();
+            ctx.globalCompositeOperation = gco;
         }
     }
 
     class qc_wave_component extends qf_scene_component {
         public wants_tick = true;
-        public start_radious = 0;
-        public end_radious = 1000;
-        public expand_durtation = 0.5;
-        public slomo_duration = 0.1;
+        public start_radious = 10;
+        public end_radious = 400;
+        public expand_durtation = 0.25;
+        public slomo_duration = 0.15;
         protected elapsed = 0;
 
         public begin_play(): void {
@@ -1369,18 +1377,17 @@ namespace __ {
                 let m = a.getcmp(qi_ai_movement)[0];
                 if (a.root && m) {
 
-                    let dir = qm_sub(a.get_pos(), this.pos);
-                    let mag = qm_mag(dir);
-                    dir = qm_scale(qm_unit(dir), 300 * (30 / mag));
-                    m.vel = dir;
-
+                    m.vel = qm_clamp_mag(qm_sub(a.get_pos(), this.pos), 600, 0);
+                    // save values
                     m.do_proces_input = false;
                     let b = m.bounce_off_wall;
                     let ms = m.max_velocity;
+                    // temporary change
                     m.bounce_off_wall = true;
                     m.max_velocity = 9000;
 
-                    t.delay(1, _ => { 
+                    t.delay(this.slomo_duration, _ => {                         
+                        // restore
                         m.do_proces_input = true;
                         m.bounce_off_wall = b;
                         m.max_velocity = ms;
@@ -1390,13 +1397,16 @@ namespace __ {
         }
 
         public tick(delta: number): void {
-            const hs = this.slomo_duration / 1.1;
-            g_time_dilation = qm_clamp(1 - this.elapsed / hs, 0.01, 1);
-
             this.elapsed += delta;
 
+            if (this.elapsed < this.slomo_duration) {
+                const hs = this.slomo_duration / 1.05;
+                g_time_dilation = qm_clamp(1 - this.elapsed / hs, 0.01, 1);
+            }
             if (this.elapsed > this.slomo_duration) {
                 g_time_dilation = 1;
+            }
+            if (this.elapsed > this.expand_durtation) {
                 this.owner.destroy();
             }
         }
@@ -1418,9 +1428,13 @@ namespace __ {
     class qc_pickable_component extends qf_component_base {
 
         public activate_delegate: Function;
+        public lifespan = 0;
 
         public begin_play(): void {
-            this.get_timer().every(0.1, this.update, this);
+            this.get_timer().every(0.05, this.update, this);
+            if (this.lifespan > 0) {
+                this.get_timer().delay(this.lifespan, this.owner.destroy, this.owner);
+            }
         }
 
         public update() {
@@ -1471,7 +1485,7 @@ namespace __ {
     {
         // setup
         public ground_acc = 500;
-        public air_acc  = 500;
+        public air_acc  = 100;
         public jump_vel = 300;
         public flying = false;
 
@@ -1486,11 +1500,8 @@ namespace __ {
             }
 
             if (this.input.x != 0) {
-                if (this.on_ground) {
-                    this.acc.x = this.input.x * this.ground_acc;
-                } else {
-                    this.acc.x = this.input.x * this.air_acc;
-                }
+                this.acc.x = this.input.x * (this.on_ground ? this.ground_acc : this.air_acc);
+                this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
             }
             else if (this.on_ground) {
                 this.vel.x *= 0.8;
@@ -1579,9 +1590,9 @@ namespace __ {
             let c = w.actors.filter(a => a.getcmp(qi_enemy_controller)[0]);
 
             for (let i = qm_rnd(1, 3); i >= 0; --i) {
-                // let coin = spawn_coin(w, qm_add(this.owner.get_pos(), v2(0, -5))).getcmp(qc_projectile_movement)[0];
                 let coin = spawn_coin(w, this.owner.get_pos()).getcmp(qc_projectile_movement)[0];
-                coin.vel.x = this.last_hit.dir.x * -qm_rnd(100, 200);
+                let lh = this.last_hit.dir;
+                coin.vel.x = (lh.x != 0 ? lh.x : 1) * -qm_rnd(100, 200);
                 coin.vel.y = qm_rnd(200, 400);
             }
 
@@ -1592,6 +1603,10 @@ namespace __ {
                         qm_rnd_select(qi_spawn_humanoid, qi_spawn_slime, spawn_bat)(w, { x: qm_rnd(30, 340), y: 30 });
                     }, this.target);
                 }
+            }
+
+            if (g_time_dilation < 1) {
+                spawn_freeze_wave(w, this.owner.get_pos());
             }
 
             qi_g_on_enemy_killed.broadcast(this.owner);
@@ -1674,16 +1689,15 @@ namespace __ {
                 this.mov.input = v2();
                 this.mov.vel.x = 0;
                 let dir = qm_sub(trg_pos, this_pos);
-                spawn_projectile(w, this_pos, dir, this.owner, {lifespan: 3, gravity: 0, cc: qf_cc.player | qf_cc.geom});
+                spawn_bullet(w, this_pos, dir, this.owner, {lifespan: 3, gravity: 0, cc: qf_cc.player | qf_cc.geom});
             }
         }
 
         public take_damage(e: qf_damage_event): void {
             this.think_event.fire_in = 0.5 * this.dimishing_return;
             this.mov.input = v2();
-            this.mov.vel.x -= 1000 * e.dir.x * this.dimishing_return;
-
-            this.mov.vel.y -= 300 * this.dimishing_return * (this.mov.flying ? 0.1 : 1);
+            this.mov.vel.x -= 200 * e.dir.x * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
+            this.mov.vel.y -= 160 * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
 
             this.dimishing_return = qm_clamp(this.dimishing_return - 0.1, 0, 1);
             super.take_damage(e);
@@ -1773,6 +1787,7 @@ namespace __ {
 
         let p = qf_attach_cmp(a, new qc_pickable_component());
         p.activate_delegate = _ => a.destroy();
+        p.lifespan = 2;
 
         return a;
     }
@@ -1783,10 +1798,11 @@ namespace __ {
         return a;
     }
 
-    function spawn_explosion(world: qf_world, {x, y, radious = 15}): qf_actor {
+    function spawn_explosion(world: qf_world, {x, y, radious = 15, duration = 0.11}): qf_actor {
         let a = world.spawn_actor();
         let e = qf_attach_prim(a, new qc_explosion_component(), {x, y});
         e.radious = (qm_rnd_normal() + 1) * radious;
+        e.duration = duration;
         return a;
     }
 
@@ -1803,15 +1819,11 @@ namespace __ {
             const move_right = k.is_down('ArrowRight');
             const jump =  k.just_pressed('ArrowUp') || k.just_pressed(' ');
 
-            if (move_left) {
-                // this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
-                this.acc.x = -speed;
-                this.moving_left = true;
-            }
-            else if (move_right) {
+            if (move_left || move_right) {
                 // this.acc.x = speed * (this.on_ground ? 1 : 0.5);
-                this.acc.x = speed;
-                this.moving_left = false;
+                this.acc.x = move_left ? -speed : speed;
+                this.moving_left = move_left;
+                this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
             }
             else if (this.on_ground)
             {
@@ -2021,7 +2033,7 @@ namespace __ {
 
     // #DEBUG-END
 
-    function spawn_projectile(world: qf_world, loc: qm_vec, dir: qm_vec, instigator: qf_actor,
+    function spawn_bullet(world: qf_world, loc: qm_vec, dir: qm_vec, instigator: qf_actor,
         {lifespan = 0, gravity = 1000, cc = qf_cc.all}): qf_actor
     {
         let a = world.spawn_actor();
@@ -2039,7 +2051,7 @@ namespace __ {
         p.lifespan = lifespan;
         p.on_hit.bind(_ => r.play('explode'), r);
         p.instigator = instigator;
-        p.collision_channel = qf_cc.all;
+        p.collision_channel = cc;
 
         p.on_hit.bind(hit => {
             if (hit.actor) {
@@ -2068,6 +2080,7 @@ namespace __ {
 
         protected fire_rate = 4;
         protected fire_delegate: Function;
+        protected timer = new qf_timer();
 
         public begin_play()
         {
@@ -2093,6 +2106,7 @@ namespace __ {
 
         public tick(delta: number): void
         {
+            this.timer.tick(delta * 1/g_time_dilation);
             let a = this.owner;
 
             this.sprite.flip_x = !this.movement.moving_left;
@@ -2150,14 +2164,14 @@ namespace __ {
             this.movement.vel.x += e.dir.x * 100;
             this.movement.vel.y -= 100;
             // this.sprite.blink();
-            spawn_freeze_wave(this.get_world(), this.owner.get_pos());
-
-
+            spawn_freeze_wave(this.get_world(), qm_add(this.owner.get_pos(), v2(0, 3)));
+            // just for shake
+            spawn_explosion(this.get_world(), {x:-100, y:-100, duration: 0.1});
             // reset();
         }
 
         public set_fire_rate(rate: number): void {
-            this.fire_delegate = this.get_timer().throttle(1/qm_clamp(rate, 0.5, 1000), this.fire, this);
+            this.fire_delegate = this.timer.throttle(1/qm_clamp(rate, 0.5, 1000), this.fire, this);
         }
 
         protected fire(): void {
@@ -2175,8 +2189,8 @@ namespace __ {
 
             for (let i = 0; i < this.bullets_per_shoot; ++i)
             {
-                spawn_projectile(a.world, this.weapon_sprite.get_pos(), 
-                    qm_scale(dir, this.bullet_speed), this.owner,
+                spawn_bullet(a.world, this.weapon_sprite.get_pos(), 
+                    qm_scale(dir, this.bullet_speed * 1/g_time_dilation), this.owner,
                     { lifespan: 0.3, gravity: 0, cc: qf_cc.pawn | qf_cc.geom });
                 dir = qm_rotate(dir, step);
             }
@@ -2309,7 +2323,7 @@ namespace __ {
 1               11         0
 1                          0
 1                          0
-1        @                 0
+1        @  h              0
 1      000000     000000   0
 1      000                 0
 1      00                  0
@@ -2317,14 +2331,6 @@ namespace __ {
 1                          0
 0000000000000000000111111111`
                     , world)
-
-
-
-
-        world.has_begun_play = true;
-        for (let a of world.actors)
-            for (let c of a.components) 
-                c.begin_play();
     }
 
     function main()
