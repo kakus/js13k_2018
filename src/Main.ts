@@ -543,6 +543,80 @@ namespace g {
         
     }
 
+    function qf_easing_sin_inout(t: number) {
+        return (1 - Math.cos(Math.PI * t)) / 2;
+    }
+
+    class qf_tween {
+        protected next: qf_tween;
+        protected prev: qf_tween;
+        protected total_elapsed = 0;
+        protected do_loop = false;
+
+        constructor(
+            readonly obj: Object,
+            readonly prop: string | symbol | number,
+            readonly start_value: number,
+            readonly end_value: number,
+            readonly duration: number,
+            readonly easing: (a: number) => number,
+        ) {
+            qu_assert(!!obj);
+            qu_assert(typeof obj[prop] === 'number');
+            qu_assert(duration > 0);
+        }
+
+        public tick(delta: number): void {
+            this.total_elapsed += delta;
+            let e = this.total_elapsed;
+
+            for (let self: qf_tween = this; self; self = self.next) {
+                if (e < self.duration) {
+                    let a = qm_clamp(e / self.duration, 0, 1);
+                    self.obj[self.prop] = self.start_value + (self.end_value - self.start_value) * self.easing(a);
+                    break;
+                } else {
+                    self.obj[self.prop] = self.end_value;
+                    e -= self.duration;
+
+                    if (self.do_loop) {
+                        this.total_elapsed = 0;
+                        break;
+                    }
+                }
+            }
+        }
+
+        public then<T>(obj: T, prop: keyof T, start_value: number, end_value: number, duration: number, easing = qf_easing_sin_inout): qf_tween {
+            let t = new qf_tween(obj, prop, start_value, end_value, duration, easing);
+            t.prev = this;
+            this.next = t;
+            return t;
+        }
+
+        public loop(): qf_tween { this.do_loop = true; return this.get_head(); }
+
+        public get_head() {
+            for (let s: qf_tween = this; s; s = s.prev) {
+                if (!s.prev) return s;
+            }
+        }
+        public is_tail() { return !this.next; }
+        public is_head() { return !this.prev; }
+
+        public total_duration(): number {
+            let dur = 0;
+            for (let self: qf_tween = this; self; self = self.next) {
+                dur += self.duration;
+            }
+            return dur;
+        }
+
+        public is_done(): boolean {
+            return this.total_elapsed / this.total_duration() >= 1;
+        }
+    }
+
     const enum qf_timer_type
     {
         once,
@@ -996,11 +1070,12 @@ namespace g {
 
         constructor() {
             let f = qr_pixel_font_data;
-            let w = this.char_width = f.char.width;
-            let h = this.char_height = f.char.height;
+            let w = this.char_width = f.char.width + 2;
+            let h = this.char_height = f.char.height + 2;
             let n = Object.keys(f.letters).length;
 
             let render_letter = (ctx: CanvasRenderingContext2D, letter: string) => {
+                let w = f.char.width, h = f.char.height;
                 for (let x = 0; x < w; ++x) {
                     for (let y = 0; y < h; ++y) {
                         let dot = f.letters[letter][y * w + x];
@@ -1009,11 +1084,20 @@ namespace g {
                 }
             };
 
-            this.bitmap = qr_create_canvas(w * n, h, ctx => {
-                ctx.fillStyle = '#fff';
+            this.bitmap = qr_create_canvas(w * n + 1, h, ctx => {
                 let offset_x = 0;
                 for (let l in f.letters) {
-                    render_letter(ctx, l);
+                    for (let x of [0, 2, 1]) {
+                        for (let y of [0, 2, 1]) {
+                            ctx.fillStyle = x == 1 && y == 1 ? '#fff' : '#000';
+                            ctx.save()
+                                ctx.translate(x, y);
+                                render_letter(ctx, l);
+                            ctx.restore();
+
+                        }
+                    }
+
                     this.char_offset[l] = offset_x;
                     offset_x += w;
                     ctx.translate(w, 0);
@@ -1023,12 +1107,18 @@ namespace g {
     }
 
     function qr_render_string(f: qr_font_bitmap, ctx: CanvasRenderingContext2D, text: string, pos = v2()): void {
-        let x = 0;
+        let x = 0, y = 0;
+        // ctx.drawImage(f.bitmap, pos.x, pos.y);
         for (let l of text.toUpperCase()) {
+            if (l === '\n') {
+                y += f.char_height;
+                x = 0;
+                continue;
+            }
             ctx.drawImage(f.bitmap,
                 f.char_offset[l], 0, f.char_width, f.char_height,
-                x + pos.x, pos.y, f.char_width, f.char_height);
-            x += f.char_width + 1;
+                x + pos.x, y + pos.y, f.char_width, f.char_height);
+            x += f.char_width - 1;
         }
     }
 
@@ -1173,9 +1263,17 @@ namespace g {
                        'ArrowRight' |
                        'ArrowUp' |
                        'ArrowDown' |
-                       'z' | 'x' | ' ';
+                       'z' | 'x' | ' ' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8';
 
             const state: { [key:string]: key_state } =  { };
+            const key_down_bindings: { [key:string]: qf_multicast_delegate<Function> } = { };
+
+            export function bind_keydown(key: key, fn: Function, owner: qf_bindable): void {
+                let b = key_down_bindings[key];
+                if (!b) { b = key_down_bindings[key] = new qf_multicast_delegate(); }
+                b.bind(fn, owner);
+            }
+
             export function is_down(key: key) { return state[key] ? state[key].is_down : false; }
             export function get_state(key: key | string): key_state { 
                 let s = state[key];
@@ -1196,6 +1294,9 @@ namespace g {
                 if (s.is_down) return;
                 s.is_down = true;
                 s.timestamp = Date.now();
+                if (key_down_bindings[e.key]) {
+                    key_down_bindings[e.key].broadcast();
+                }
                 e.preventDefault();
             }
 
@@ -1700,6 +1801,14 @@ namespace g {
         }
     }
 
+    class qc_label_component extends qf_scene_component {
+        public text = '';
+        public font = qr_pixel_font;
+        public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
+            qr_render_string(this.font, ctx, this.text);
+        }
+    }
+
     class qc_explosion_component extends qf_scene_component {
         public wants_tick = true;
         public duration = 0.11;
@@ -1800,11 +1909,16 @@ namespace g {
 
     class qc_pickable_component extends qf_component_base {
 
-        public activate_delegate: Function;
+        public on_overlap_begins = new qf_multicast_delegate();
+        public on_overlap_ends = new qf_multicast_delegate();
+
         public lifespan = 0;
         public elapsed = 0;
         public blink = false;
         public wants_tick = true;
+        public bounds: qm_aabb;
+
+        protected last_frame_overlap = false;
 
         public begin_play(): void {
             // this.get_timer().every(0.05, this.update, this);
@@ -1821,9 +1935,14 @@ namespace g {
             let w = this.get_world();
             this.elapsed += delta;
             
-            let o = w.overlap(r.get_aabb(), qf_cc.player);
-            if (o[0] && this.activate_delegate) {
-                this.activate_delegate();
+            let o = w.overlap(this.bounds ? this.bounds : r.get_aabb(), qf_cc.player);
+            if (o[0] && !this.last_frame_overlap) {
+                this.on_overlap_begins.broadcast();
+                this.last_frame_overlap = true;
+            }
+            else if (!o[0] && this.last_frame_overlap) {
+                this.on_overlap_ends.broadcast();
+                this.last_frame_overlap = false;
             }
 
         }
@@ -1832,6 +1951,289 @@ namespace g {
             let r = this.owner.root;
             if (this.lifespan > 0 && (this.lifespan - this.elapsed) < 1) {
                 r.visible = !r.visible;
+            }
+        }
+    }
+
+    class qc_tween_manager extends qf_component_base {
+        public tweens: qf_tween[] = [];
+        public wants_tick = true;
+
+        public tick(delta: number): void {
+            for (let i = this.tweens.length - 1; i >= 0; --i) {
+                this.tweens[i].tick(delta);
+                if (this.tweens[i].is_done()) {
+                    this.tweens.splice(i, 1);
+                }
+            }
+        }
+        public make<T>(obj: T, prop: keyof T, start_value: number, end_value: number, duration: number, easing = qf_easing_sin_inout): qf_tween {
+            let t = new qf_tween(obj, prop, start_value, end_value, duration, easing);
+            this.tweens.push(t);
+            return t;
+        }
+    }
+
+    class qc_player_movement extends qc_character_movement
+    {
+        public process_input() {
+            const speed = 900;
+
+            this.acc.x = 0;
+            this.acc.y = 0;
+
+            let k = qs_input.keyboard;
+            const move_left = k.is_down('ArrowLeft');
+            const move_right = k.is_down('ArrowRight');
+            const jump =  k.just_pressed('ArrowUp') || k.just_pressed(' ');
+
+            if (move_left || move_right) {
+                // this.acc.x = speed * (this.on_ground ? 1 : 0.5);
+                this.acc.x = move_left ? -speed : speed;
+                this.moving_left = move_left;
+                this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
+            }
+            else if (this.on_ground)
+            {
+                this.vel.x *= 0.4;
+            }
+
+            if (jump) {
+                if (this.on_ground) {
+                    this.acc.y = -speed * 100;
+                }
+                else if (move_left || move_right) {
+                    let wall_trace = this.trace_wall(5);
+                    if (wall_trace) {
+                        let [p, n] = wall_trace;
+                        let r = this.owner.root;
+                        let dist = qm_mag(qm_sub(p, r.pos)) - r.bounds.x / 2;
+
+                        let do_jump = false;
+                        let jump_off_wall = false;
+
+                        if (move_left) {
+                            jump_off_wall = n.x < 0;
+                            do_jump = dist <= (n.x > 0 ? 1 : 5);
+                        }
+                        if (move_right) {
+                            jump_off_wall = n.x > 0;
+                            do_jump = dist <= (n.x < 0 ? 1 : 5);
+                        }
+
+                        if (do_jump) {
+                            this.acc.x = speed * n.x * (jump_off_wall ? 10 : 50);
+                            this.acc.y = -speed * (jump_off_wall ? 60 : 200);
+                        }
+                    }
+                }
+            }
+        }
+
+        public tick(delta: number)
+        {
+            delta = delta * 1/g_time_dilation;
+            this.process_input();
+            super.tick(delta);
+        }
+    }
+
+    class qc_projectile_movement extends qf_component_base
+    {
+        public acc = v2(0, 1000);
+        public vel = v2();
+        public lifespan = 0;
+        public damage = 1;
+        public rotate_root = true;
+        public bounce_off_walls = false;
+        public bounce_factor = 0.5; // 1 = no velocity loss
+        public instigator: qf_actor = null;
+        public collision_channel: qf_cc = qf_cc.all;
+        public on_hit = new qf_multicast_delegate<(hit_result: qf_hit_result, bullet: this) => void>();
+        public wants_tick = true;
+
+        public begin_play() {
+            if (this.lifespan > 0) {
+                this.get_timer().delay(this.lifespan, _ => this.owner.destroy(), this.owner);
+            }
+        }
+
+        public tick(delta: number): void
+        {
+            let r = this.owner.root;
+            let w = this.owner.world;
+
+            this.vel = qm_add(this.vel, qm_scale(this.acc, delta));
+            let ds = qm_scale(this.vel, delta);
+            let end = qm_add(r.pos, ds);
+
+            let hit_result = w.sweep_aabb(r.pos, end, r.bounds, this.collision_channel);
+            if (hit_result)
+            {
+                if (this.bounce_off_walls) {
+                    if (hit_result.normal.x != 0) this.vel.x *= -this.bounce_factor;
+                    if (hit_result.normal.y != 0) this.vel.y *= -this.bounce_factor;
+                }
+                else {
+                    this.vel = v2();
+                    this.acc = v2();
+                    this.wants_tick = false;
+                }
+
+                r.pos = v2c(hit_result.pos);
+                this.on_hit.broadcast(hit_result, this);
+            }
+            else
+            {
+                r.pos = end;
+                if (this.rotate_root) {
+                    r.rot = Math.atan2(this.vel.y, this.vel.x);
+                }
+            }
+        }
+    }
+
+    class qc_player_controller extends qf_component_base
+    {
+        private movement: qc_player_movement;
+        private sprite: qc_anim_sprite_component;
+        private weapon_sprite: qc_sprite_component;
+
+        public bullet_speed = 300;
+        public fire_spread = 5;
+        public bullets_per_shoot = 1;
+        public explosion_chance = 0.1;
+        public bullet_damage = 1;
+
+        public life = 2;
+        public wants_tick = true;
+
+        protected fire_rate = 4;
+        protected fire_delegate: Function;
+        protected timer = new qf_timer();
+
+        public begin_play()
+        {
+            [this.movement] = this.owner.getcmp(qc_player_movement);
+            [this.sprite]   = this.owner.getcmp(qc_anim_sprite_component);
+            [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite') as qc_sprite_component[];
+            this.owner.on_take_damage.bind(this.take_damage, this);
+            this.set_fire_rate(this.fire_rate);
+
+            // #DEBUG-BEGIN
+            qs_input.keyboard.bind_keydown('1', _ => qm_rnd_select(spawn_bat, spawn_humanoid)(world, v2(30, 30)), this);
+            qs_input.keyboard.bind_keydown('2', _ => reset(), this);
+            // #DEBUG-END
+        }
+
+        public tick(delta: number): void
+        {
+            this.timer.tick(delta * 1/g_time_dilation);
+            let a = this.owner;
+
+            this.sprite.flip_x = !this.movement.moving_left;
+            this.weapon_sprite.pos.x = this.movement.moving_left ? -10 : 10;
+            this.weapon_sprite.flip_x = !this.movement.moving_left;
+            this.weapon_sprite.rot *= 0.9;
+
+            let vel = this.movement.vel;
+
+            if (this.movement.on_ground) {
+                if (qm_eq_eps(vel.x, 0, 3)) {
+                    this.sprite.play('idle');
+                } else {
+                    this.sprite.play('walk');
+                }
+                // g_time_dilation = 1;
+            } else {
+                this.sprite.play('jump');
+                // g_time_dilation = 0.5;
+            }
+
+            if (qs_input.keyboard.is_down('z')) {
+                this.fire_delegate();
+            }
+
+            // this.getworld().timer.throttle(0.1, (i: number) => i, this);
+
+
+            // let z_state = input.keyboard.get_state('z');
+            // if (z_state.is_down)
+            // {
+            //     this.z_press_start = input.keyboard.get_state('z').timestamp;
+            // }
+
+            // if (this.z_press_start > 0)
+            // {
+            //     const press_time = Date.now() - this.z_press_start;
+            //     const can_fire = this.last_fire_time - this.z_press_start != 0;
+
+            //     if (can_fire && (!z_state.is_down|| press_time > 1000)) {
+            //         this.last_fire_time = this.z_press_start;
+            //         this.z_press_start = 0;
+
+            //         let ampl = clamp(press_time / 100, 1, 10);
+            //         let dir = clamp_mag(add(
+            //                 scale(this.movement.moving_left ? left : right, 100 * ampl),
+            //                 v(0, 0)), 0, 800);
+
+            //         spawn_projectile(a.world, a.root.pos, dir, {lifespan: 0.6, gravity: 0});
+            //     }
+            // }
+        }
+
+        protected take_damage(e: qf_damage_event): void {
+            this.movement.vel.x += e.dir.x * 100;
+            this.movement.vel.y -= 100;
+            // this.sprite.blink();
+            spawn_freeze_wave(this.get_world(), qm_add(this.owner.get_pos(), v2(0, 3)));
+            // just for shake
+            spawn_explosion(this.get_world(), {x:-100, y:-100, duration: 0.1});
+            // reset();
+        }
+
+        public set_fire_rate(rate: number): void {
+            this.fire_delegate = this.timer.throttle(1/qm_clamp(rate, 0.5, 1000), this.fire, this);
+        }
+
+        protected fire(): void {
+
+            let a = this.owner;
+            let ml = this.movement.moving_left;
+
+            let dir = ml ? qm_left: qm_right;
+            let angle = qm_clamp((this.bullets_per_shoot - 1) * 0.087, 0, 0.785) * dir.x;
+            let step = 0;
+            if (this.bullets_per_shoot > 1) {
+                step = (2 * angle) / (this.bullets_per_shoot - 1)
+            }
+            dir = qm_rotate(dir, -angle);
+
+            for (let i = 0; i < this.bullets_per_shoot; ++i)
+            {
+                spawn_bullet(a.world, this.weapon_sprite.get_pos(), 
+                    qm_scale(dir, this.bullet_speed * 1 / g_time_dilation), this.owner,
+                    {
+                        lifespan: 0.3, gravity: 0, cc: qf_cc.pawn | qf_cc.geom,
+                        damage: this.bullet_damage,
+                        explosion_chance: this.explosion_chance
+                    });
+                dir = qm_rotate(dir, step);
+            }
+            
+            if (this.movement.on_ground)
+                this.movement.vel.x += dir.x * -0.1;
+
+            this.weapon_sprite.rot = this.movement.moving_left ? 3.14/2 :-3.14/2;
+        }
+
+        public apply_upgrade(item: qg_item_type): void {
+            switch (item) {
+                case qg_item_type.bullet_damage_upgrade: this.bullet_damage += 1; break;
+                case qg_item_type.bullet_explosion_upgrade: this.explosion_chance = qm_clamp(this.explosion_chance + 0.1, 0, 1); break;
+                case qg_item_type.bullet_num_upgrade: this.bullets_per_shoot += 1; break;
+                case qg_item_type.bullet_range_upgrade: this.bullet_speed += 50; break;
+                case qg_item_type.life_upgrade: this.life += 1; break;
             }
         }
     }
@@ -1989,7 +2391,7 @@ namespace g {
                 g_stage += 1;
                 for (let i = 0; i < g_stage; ++i) {
                     this.get_timer().delay(qm_rnd(), _ => {
-                        qm_rnd_select(qi_spawn_humanoid, qi_spawn_slime, spawn_bat)(w, { x: qm_rnd(30, 340), y: 30 });
+                        qm_rnd_select(spawn_humanoid, spawn_slime, spawn_bat)(w, { x: qm_rnd(30, 340), y: 30 });
                     }, this.target);
                 }
             }
@@ -2093,7 +2495,21 @@ namespace g {
         }
     }
 
-    function qi_spawn_slime(world: qf_world, {x, y}): qf_actor
+
+    /**
+     * GLOBALS
+     */
+    const g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
+    const g_negative_spritesheet_image = qr_create_canvas(128, 128);
+    const g_character_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 18), v2(9, 9));
+    const g_tile_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 14), v2(9, 10));
+    var g_stage = 1;
+    var g_scene_offset = v2();
+
+    /**
+     *  SPAWN METHODS
+     */
+    function spawn_slime(world: qf_world, {x, y}): qf_actor
     {
         let a = world.spawn_actor();
         let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.pawn, root: true});
@@ -2108,7 +2524,7 @@ namespace g {
         return a;
     }
 
-    function qi_spawn_humanoid(world: qf_world, {x, y}): qf_actor
+    function spawn_humanoid(world: qf_world, {x, y}): qf_actor
     {
         let a = world.spawn_actor();
         let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.pawn, root: true});
@@ -2128,19 +2544,6 @@ namespace g {
         return a;
     }
 
-    /**
-     * GLOBALS
-     */
-    const g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
-    const g_negative_spritesheet_image = qr_create_canvas(128, 128);
-    const g_character_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 18), v2(9, 9));
-    const g_tile_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 14), v2(9, 10));
-    var g_stage = 1;
-    var g_scene_offset = v2();
-
-    /**
-     *  SPAWN METHODS
-     */
     function spawn_bat(world: qf_world, {x, y}): qf_actor
     {
         let a = world.spawn_actor();
@@ -2176,7 +2579,7 @@ namespace g {
         m.collision_channel = qf_cc.geom;
 
         let p = qf_attach_cmp(a, new qc_pickable_component());
-        p.activate_delegate = _ => a.destroy();
+        p.on_overlap_begins.bind(_ => a.destroy(), p);
         p.lifespan = 4;
         p.blink = true;
 
@@ -2197,125 +2600,38 @@ namespace g {
         return a;
     }
 
-    class player_movement extends qc_character_movement
-    {
-        public process_input() {
-            const speed = 900;
+    function spawn_shop_item(world: qf_world, {x, y}): qf_actor {
+        let a = world.spawn_actor();
+        let s = qf_attach_prim(a, new qc_sprite_component(), {x, y, width: 14, height: 16, root: true});
+        s.sprite = g_character_spritesheet.get_sprite(34);
 
-            this.acc.x = 0;
-            this.acc.y = 0;
+        let item_type = qm_rnd(0, qg_item_type.max_none)|0 as qg_item_type;
 
-            let k = qs_input.keyboard;
-            const move_left = k.is_down('ArrowLeft');
-            const move_right = k.is_down('ArrowRight');
-            const jump =  k.just_pressed('ArrowUp') || k.just_pressed(' ');
+        let l = qf_attach_prim(a, new qc_label_component(), {y: -40, x: -16});
+        l.parent = s;
+        l.text = get_item_desc(item_type) + '\ncost: ' + get_item_cost(item_type).toFixed(0);
+        l.visible = false;
 
-            if (move_left || move_right) {
-                // this.acc.x = speed * (this.on_ground ? 1 : 0.5);
-                this.acc.x = move_left ? -speed : speed;
-                this.moving_left = move_left;
-                this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
-            }
-            else if (this.on_ground)
-            {
-                this.vel.x *= 0.4;
-            }
+        let p = qf_attach_cmp(a, new qc_pickable_component());
+        p.on_overlap_begins.bind(_ => l.visible = true, p);
+        p.on_overlap_ends.bind(_ => l.visible = false, p);
 
-            if (jump) {
-                if (this.on_ground) {
-                    this.acc.y = -speed * 100;
-                }
-                else if (move_left || move_right) {
-                    let wall_trace = this.trace_wall(5);
-                    if (wall_trace) {
-                        let [p, n] = wall_trace;
-                        let r = this.owner.root;
-                        let dist = qm_mag(qm_sub(p, r.pos)) - r.bounds.x / 2;
+        let p2 = qf_attach_cmp(a, new qc_pickable_component());
+        p2.bounds = [v2(x, y - 40), v2(10, 10)];
+        p2.on_overlap_begins.bind(_ => {
+            spawn_freeze_wave(world, {x, y});
+            a.destroy()
+        }, p2);
 
-                        let do_jump = false;
-                        let jump_off_wall = false;
+        let t = qf_attach_cmp(a, new qc_tween_manager());
+        t.make(s.offset, 'y', 0, -10, 1)
+         .then(s.offset, 'y', -10, 0, 1)
+         .loop()
 
-                        if (move_left) {
-                            jump_off_wall = n.x < 0;
-                            do_jump = dist <= (n.x > 0 ? 1 : 5);
-                        }
-                        if (move_right) {
-                            jump_off_wall = n.x > 0;
-                            do_jump = dist <= (n.x < 0 ? 1 : 5);
-                        }
-
-                        if (do_jump) {
-                            this.acc.x = speed * n.x * (jump_off_wall ? 10 : 50);
-                            this.acc.y = -speed * (jump_off_wall ? 60 : 200);
-                        }
-                    }
-                }
-            }
-        }
-
-        public tick(delta: number)
-        {
-            delta = delta * 1/g_time_dilation;
-            this.process_input();
-            super.tick(delta);
-        }
+        return a;
     }
 
 
-    class qc_projectile_movement extends qf_component_base
-    {
-        public acc = v2(0, 1000);
-        public vel = v2();
-        public lifespan = 0;
-        public damage = 1;
-        public rotate_root = true;
-        public bounce_off_walls = false;
-        public bounce_factor = 0.5; // 1 = no velocity loss
-        public instigator: qf_actor = null;
-        public collision_channel: qf_cc = qf_cc.all;
-        public on_hit = new qf_multicast_delegate<(hit_result: qf_hit_result, bullet: this) => void>();
-        public wants_tick = true;
-
-        public begin_play() {
-            if (this.lifespan > 0) {
-                this.get_timer().delay(this.lifespan, _ => this.owner.destroy(), this.owner);
-            }
-        }
-
-        public tick(delta: number): void
-        {
-            let r = this.owner.root;
-            let w = this.owner.world;
-
-            this.vel = qm_add(this.vel, qm_scale(this.acc, delta));
-            let ds = qm_scale(this.vel, delta);
-            let end = qm_add(r.pos, ds);
-
-            let hit_result = w.sweep_aabb(r.pos, end, r.bounds, this.collision_channel);
-            if (hit_result)
-            {
-                if (this.bounce_off_walls) {
-                    if (hit_result.normal.x != 0) this.vel.x *= -this.bounce_factor;
-                    if (hit_result.normal.y != 0) this.vel.y *= -this.bounce_factor;
-                }
-                else {
-                    this.vel = v2();
-                    this.acc = v2();
-                    this.wants_tick = false;
-                }
-
-                r.pos = v2c(hit_result.pos);
-                this.on_hit.broadcast(hit_result, this);
-            }
-            else
-            {
-                r.pos = end;
-                if (this.rotate_root) {
-                    r.rot = Math.atan2(this.vel.y, this.vel.x);
-                }
-            }
-        }
-    }
 
     // #DEBUG-BEGIN
     export var g_draw_considered = false;
@@ -2337,7 +2653,7 @@ namespace g {
 
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void
         {
-            qr_render_string(qr_pixel_font ,ctx, 'hallo0231?', v2(20, 30));
+            qr_render_string(qr_pixel_font ,ctx, 'hallo 0231?', v2(20, 30));
 
             const tl = this.tiles.tile_size;
             ctx.strokeStyle = 'white';
@@ -2427,7 +2743,7 @@ namespace g {
     // #DEBUG-END
 
     function spawn_bullet(world: qf_world, loc: qm_vec, dir: qm_vec, instigator: qf_actor,
-        {lifespan = 0, gravity = 1000, cc = qf_cc.all}): qf_actor
+        {lifespan = 0, gravity = 1000, cc = qf_cc.all, damage = 1, explosion_chance = 0}): qf_actor
     {
         let a = world.spawn_actor();
 
@@ -2445,14 +2761,15 @@ namespace g {
         p.on_hit.bind(_ => r.play('explode'), r);
         p.instigator = instigator;
         p.collision_channel = cc;
+        p.damage = damage;
 
         p.on_hit.bind(hit => {
             if (hit.actor) {
                 hit.actor.on_take_damage.broadcast(new qf_damage_event(p.damage, p.instigator, hit.normal));
             }
-            if (qm_rnd() > 0.8)
+            if (qm_rnd() < explosion_chance) {
                 spawn_explosion(p.get_world(), hit.pos);
-
+            }
         }, a);
 
         qf_attach_cmp(a, p);
@@ -2460,159 +2777,6 @@ namespace g {
         return a;
     }
 
-    class player_controller extends qf_component_base
-    {
-        private movement: player_movement;
-        private sprite: qc_anim_sprite_component;
-        private weapon_sprite: qc_sprite_component;
-
-        public bullet_speed = 300;
-        public fire_spread = 5;
-        public bullets_per_shoot = 1;
-        public wants_tick = true;
-
-        protected fire_rate = 4;
-        protected fire_delegate: Function;
-        protected timer = new qf_timer();
-
-        public begin_play()
-        {
-            [this.movement] = this.owner.getcmp(player_movement);
-            [this.sprite]   = this.owner.getcmp(qc_anim_sprite_component);
-            [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite') as qc_sprite_component[];
-            this.owner.on_take_damage.bind(this.take_damage, this);
-            this.set_fire_rate(this.fire_rate);
-
-            let counter = 0;
-            qi_g_on_enemy_killed.bind(a => {
-                counter += 1;
-
-                this.set_fire_rate(4 + counter / 4);
-                this.bullet_speed = qm_clamp(this.bullet_speed + 10,  10, 1000);
-
-                if (this.bullets_per_shoot < 10 && counter % 5 == 0) {
-                    this.bullets_per_shoot += 1;
-                }
-
-            }, this);
-        }
-
-        public tick(delta: number): void
-        {
-            this.timer.tick(delta * 1/g_time_dilation);
-            let a = this.owner;
-
-            this.sprite.flip_x = !this.movement.moving_left;
-            this.weapon_sprite.pos.x = this.movement.moving_left ? -10 : 10;
-            this.weapon_sprite.flip_x = !this.movement.moving_left;
-            this.weapon_sprite.rot *= 0.9;
-
-            let vel = this.movement.vel;
-
-            if (this.movement.on_ground) {
-                if (qm_eq_eps(vel.x, 0, 3)) {
-                    this.sprite.play('idle');
-                } else {
-                    this.sprite.play('walk');
-                }
-                // g_time_dilation = 1;
-            } else {
-                this.sprite.play('jump');
-                // g_time_dilation = 0.5;
-            }
-
-            if (qs_input.keyboard.is_down('z')) {
-                this.fire_delegate();
-            }
-
-            // this.getworld().timer.throttle(0.1, (i: number) => i, this);
-
-
-            // let z_state = input.keyboard.get_state('z');
-            // if (z_state.is_down)
-            // {
-            //     this.z_press_start = input.keyboard.get_state('z').timestamp;
-            // }
-
-            // if (this.z_press_start > 0)
-            // {
-            //     const press_time = Date.now() - this.z_press_start;
-            //     const can_fire = this.last_fire_time - this.z_press_start != 0;
-
-            //     if (can_fire && (!z_state.is_down|| press_time > 1000)) {
-            //         this.last_fire_time = this.z_press_start;
-            //         this.z_press_start = 0;
-
-            //         let ampl = clamp(press_time / 100, 1, 10);
-            //         let dir = clamp_mag(add(
-            //                 scale(this.movement.moving_left ? left : right, 100 * ampl),
-            //                 v(0, 0)), 0, 800);
-
-            //         spawn_projectile(a.world, a.root.pos, dir, {lifespan: 0.6, gravity: 0});
-            //     }
-            // }
-        }
-
-        protected take_damage(e: qf_damage_event): void {
-            this.movement.vel.x += e.dir.x * 100;
-            this.movement.vel.y -= 100;
-            // this.sprite.blink();
-            spawn_freeze_wave(this.get_world(), qm_add(this.owner.get_pos(), v2(0, 3)));
-            // just for shake
-            spawn_explosion(this.get_world(), {x:-100, y:-100, duration: 0.1});
-            // reset();
-        }
-
-        public set_fire_rate(rate: number): void {
-            this.fire_delegate = this.timer.throttle(1/qm_clamp(rate, 0.5, 1000), this.fire, this);
-        }
-
-        protected fire(): void {
-
-            let a = this.owner;
-            let ml = this.movement.moving_left;
-
-            let dir = ml ? qm_left: qm_right;
-            let angle = qm_clamp((this.bullets_per_shoot - 1) * 0.087, 0, 0.785) * dir.x;
-            let step = 0;
-            if (this.bullets_per_shoot > 1) {
-                step = (2 * angle) / (this.bullets_per_shoot - 1)
-            }
-            dir = qm_rotate(dir, -angle);
-
-            for (let i = 0; i < this.bullets_per_shoot; ++i)
-            {
-                spawn_bullet(a.world, this.weapon_sprite.get_pos(), 
-                    qm_scale(dir, this.bullet_speed * 1/g_time_dilation), this.owner,
-                    { lifespan: 0.3, gravity: 0, cc: qf_cc.pawn | qf_cc.geom });
-                dir = qm_rotate(dir, step);
-            }
-            
-            if (this.movement.on_ground)
-                this.movement.vel.x += dir.x * -0.1;
-
-            this.weapon_sprite.rot = this.movement.moving_left ? 3.14/2 :-3.14/2;
-        }
-    }
-
-    // class buff_spawner extends component_base {
-    //     protected enabled = false;
-
-    //     public begin_play(): void {
-    //         g_on_enemy_killed.bind(this.on_enemy_killed, this);
-    //     }
-
-    //     public tick(delta: number) {
-    //         if (!this.enabled) return;
-    //         if (overlap_aabb(this.owner.root.get_aabb(), this.get_world().player.root.get_aabb())) {
-
-    //         }
-    //     }
-
-    //     protected on_enemy_killed(): void {
-
-    //     }
-    // }
 
     function spawn_player(world: qf_world, {x, y}): qf_actor {
         let a = world.spawn_actor();
@@ -2637,12 +2801,13 @@ namespace g {
         pistol.flip_x = true;
         pistol.sprite = g_character_spritesheet.get_sprite(18);
 
-        qf_attach_cmp(a, new player_movement());
-        qf_attach_cmp(a, new player_controller());
+        qf_attach_cmp(a, new qc_player_movement());
+        qf_attach_cmp(a, new qc_player_controller());
 
         // #DEBUG-BEGIN
         let tdebug = new debug_draw_collisions();
         qf_attach_prim(a, tdebug, {});
+
         // #DEBUG-END
 
         world.player = a;
@@ -2671,11 +2836,53 @@ namespace g {
                     spawn_tile(tile_map, pos, char);
                 }
                 if (char === '@') spawn_player(world, pos)
-                if (char === 's') qi_spawn_slime(world, pos);
-                if (char === 'h') qi_spawn_humanoid(world, pos);
+                if (char === 's') spawn_slime(world, pos);
+                if (char === 'h') spawn_humanoid(world, pos);
+                if (char ==  'i') spawn_shop_item(world, pos);
                 x += 1;
             }
             y += 1;
+        }
+    }
+
+
+    const enum qg_item_type {
+        fire_rate_upgrade,
+        bullet_range_upgrade,
+        bullet_damage_upgrade,
+        bullet_num_upgrade,
+        bullet_explosion_upgrade,
+        bullet_knockback_upgrade,
+
+        life_upgrade,
+        coin_drop_upgrade,
+        max_none
+    }
+
+    function get_item_desc(i: qg_item_type): string {
+        switch (i) {
+            case qg_item_type.fire_rate_upgrade:        return 'increased fire rate';
+            case qg_item_type.bullet_range_upgrade:     return 'increased bullet range';
+            case qg_item_type.bullet_damage_upgrade:    return 'increased bullet damage';
+            case qg_item_type.bullet_num_upgrade:       return 'increased bullet num';
+            case qg_item_type.bullet_explosion_upgrade: return 'increased explosion chance';
+            case qg_item_type.bullet_knockback_upgrade: return 'increased bullet knockback';
+
+            case qg_item_type.life_upgrade:             return 'life';
+            case qg_item_type.coin_drop_upgrade:        return 'increased coin drop';
+        }
+    }
+    function get_item_cost(i: qg_item_type): number {
+        switch (i) {
+            case qg_item_type.fire_rate_upgrade:       return 10;
+            case qg_item_type.bullet_range_upgrade:    return 10;
+            case qg_item_type.bullet_damage_upgrade:   return 50;
+            case qg_item_type.bullet_num_upgrade:      return 100;
+            case qg_item_type.bullet_explosion_upgrade:return 50;
+            case qg_item_type.bullet_knockback_upgrade:return 80;
+
+            case qg_item_type.life_upgrade:            return 100;
+            case qg_item_type.coin_drop_upgrade:       return 100;
         }
     }
 
@@ -2712,16 +2919,16 @@ namespace g {
 `0000000000000000000000000000
 1                          0
 1                          0
-1               s          0
+1                          0
 1               11         0
 1                          0
 1                          0
-1        @  h              0
-1      000000     000000   0
+1        @  i   i   i      0
+1      00000000000000000   0
 1      000                 0
 1      00                  0
 1      0                   0          
-1                          0
+1                  i       0
 0000000000000000000111111111`
                     , world)
     }
