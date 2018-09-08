@@ -395,16 +395,6 @@ namespace g {
         public abstract render_c2d_impl(ctx: CanvasRenderingContext2D): void;
     }
 
-    class qf_rect_primitve extends qf_scene_component
-    {
-        public fill_color: any;
-        public render_c2d_impl(ctx: CanvasRenderingContext2D): void
-        {
-            ctx.fillStyle = this.fill_color;
-            ctx.fillRect(-this.bounds.x/2, -this.bounds.y/2, this.bounds.x, this.bounds.y);
-        }
-    }
-
     class qf_damage_event {
         constructor(
             public readonly damage: number,
@@ -1416,20 +1406,36 @@ namespace g {
 
         public activate_delegate: Function;
         public lifespan = 0;
+        public elapsed = 0;
+        public blink = false;
+        public wants_tick = true;
 
         public begin_play(): void {
-            this.get_timer().every(0.05, this.update, this);
+            // this.get_timer().every(0.05, this.update, this);
             if (this.lifespan > 0) {
                 this.get_timer().delay(this.lifespan, this.owner.destroy, this.owner);
+                if (this.blink) {
+                    this.get_timer().every(0.1, this.blink_impl, this);
+                }
             }
         }
 
-        public update() {
+        public tick(delta: number) {
             let r = this.owner.root;
             let w = this.get_world();
+            this.elapsed += delta;
+            
             let o = w.overlap(r.get_aabb(), qf_cc.player);
             if (o[0] && this.activate_delegate) {
                 this.activate_delegate();
+            }
+
+        }
+
+        public blink_impl() {
+            let r = this.owner.root;
+            if (this.lifespan > 0 && (this.lifespan - this.elapsed) < 1) {
+                r.visible = !r.visible;
             }
         }
     }
@@ -1775,7 +1781,8 @@ namespace g {
 
         let p = qf_attach_cmp(a, new qc_pickable_component());
         p.activate_delegate = _ => a.destroy();
-        p.lifespan = 2;
+        p.lifespan = 4;
+        p.blink = true;
 
         return a;
     }
