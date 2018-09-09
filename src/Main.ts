@@ -38,7 +38,7 @@ namespace g {
     function qm_mag_sqr(a: qm_vec) { return a.x * a.x + a.y * a.y; }
     function qm_mag(a: qm_vec) { return Math.sqrt(qm_mag_sqr(a)); }
     function qm_unit(a: qm_vec) { let m = qm_mag(a); return qm_scale(a, 1/m); }
-    function qm_clamp_mag(a: qm_vec, min: number, max: number) {
+    function qm_clamp_mag(a: qm_vec, min: number, max: number = min) {
         let m = qm_mag(a);
         return m < min ? qm_scale(qm_unit(a), min) :
                m > max ? qm_scale(qm_unit(a), max) :
@@ -323,7 +323,7 @@ namespace g {
         none      = 0,
         geom      = 1 << 1,
         // visibilty = 1 << 2,
-        pawn      = 1 << 3,
+        enemy      = 1 << 3,
         player    = 1 << 4,
         all       = 0xffffffff
     }
@@ -418,7 +418,7 @@ namespace g {
         public readonly on_take_damage = new qf_multicast_delegate<qf_damage_delegate>();
 
         public is_valid(): boolean {
-            return !!this.world;
+            return this.world && this.world === g_world;
         }
 
         public destroy() { 
@@ -1063,6 +1063,14 @@ namespace g {
 				1, 0, 1,
 				0, 1, 0,
 				0, 1, 0
+            ],
+            
+            'Z': [
+				1, 1, 1,
+				0, 0, 1,
+				0, 1, 0,
+				1, 0, 0,
+				1, 1, 1
 			]
 		},
     };
@@ -1264,32 +1272,34 @@ namespace g {
 
         export namespace keyboard
         {
-            type key = 'ArrowLeft' |
+            type key_type = 'ArrowLeft' |
                        'ArrowRight' |
                        'ArrowUp' |
                        'ArrowDown' |
                        'z' | 'x' | ' ' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8';
 
+            type q_keyboard_event = KeyboardEvent | q_fake_keyboard_event;
+
             const state: { [key:string]: key_state } =  { };
             const key_down_bindings: { [key:string]: qf_multicast_delegate<Function> } = { };
 
-            export function bind_keydown(key: key, fn: Function, owner: qf_bindable): void {
+            export function bind_keydown(key: key_type, fn: Function, owner: qf_bindable): void {
                 let b = key_down_bindings[key];
                 if (!b) { b = key_down_bindings[key] = new qf_multicast_delegate(); }
                 b.bind(fn, owner);
             }
 
-            export function is_down(key: key) { 
+            export function is_down(key: key_type) { 
                 return state[key] ? state[key].is_down : false; 
             }
 
-            export function get_state(key: key | string): key_state { 
+            export function get_state(key: key_type | string): key_state { 
                 let s = state[key];
                 if (!s) state[key] = s = new key_state();
                 return s;
             }
 
-            export function just_pressed(key: key, dt_ms = 20) {
+            export function just_pressed(key: key_type, dt_ms = 20) {
                 let ks = state[key];
                 if (ks && ks.is_down) {
                     return Date.now() - ks.timestamp < dt_ms;
@@ -1297,7 +1307,12 @@ namespace g {
                 return false;
             }
 
-            export function on_keydown(e: KeyboardEvent) {
+            export function on_keydown(e: q_keyboard_event) {
+                // #DEBUG-BEGIN
+                if (e instanceof KeyboardEvent) {
+                    g_poll_gamepad = false;
+                }
+                // #DEBUG-END
                 let s = get_state(e.key);
                 if (s.is_down) return;
                 s.is_down = true;
@@ -1308,9 +1323,50 @@ namespace g {
                 e.preventDefault();
             }
 
-            export function on_keyup(e: KeyboardEvent) {
+            export function on_keyup(e: q_keyboard_event) {
                 get_state(e.key).is_down = false;
             }
+
+            class q_fake_keyboard_event {
+                constructor(public key: key_type) { }
+                preventDefault() { }
+            }
+            // #DEBUG-BEGIN
+            let g_poll_gamepad = false;
+            export function poll_gamepad() {
+                let gp = navigator.getGamepads()[0];
+
+                if (!g_poll_gamepad && gp) {
+                    g_poll_gamepad = gp.buttons[0].pressed;
+                }
+
+                if (g_poll_gamepad && gp) {
+                    if (gp.buttons[0].pressed) {
+                        on_keydown(new q_fake_keyboard_event(' '));
+                    } else if (get_state(' ').is_down) {
+                        on_keyup(new q_fake_keyboard_event(' '));
+                    }
+                    if (gp.buttons[2].pressed) {
+                        on_keydown(new q_fake_keyboard_event('z'));
+                    } else if (gp.buttons[7].pressed) {
+                        on_keydown(new q_fake_keyboard_event('z'));
+                    } else if (get_state('z').is_down) {
+                        on_keyup(new q_fake_keyboard_event('z'));
+                    }
+
+                    if (gp.axes[0] > 0.5) {
+                        on_keydown(new q_fake_keyboard_event('ArrowRight'));
+                    } else if (get_state('ArrowRight').is_down) {
+                        on_keyup(new q_fake_keyboard_event('ArrowRight'));
+                    }
+                    if (gp.axes[0] < -0.5) {
+                        on_keydown(new q_fake_keyboard_event('ArrowLeft'));
+                    } else if (get_state('ArrowLeft').is_down) {
+                        on_keyup(new q_fake_keyboard_event('ArrowLeft'));
+                    }
+                }
+            }
+            // #DEBUG-END
         }
 
         export namespace mouse
@@ -1762,7 +1818,7 @@ namespace g {
         public negative = false;
 
         public blink(): void {
-            this.visible = false;
+            // this.visible = false;
             this.negative = true;
             this.get_timer().delay(0.05, _ => this.visible = true, this);
             this.get_timer().delay(0.10, _ => this.negative = false, this);
@@ -1813,9 +1869,8 @@ namespace g {
         protected text = '';
         public font = qr_pixel_font;
         public set_text(s: string): void {
-            // qu_log(s, s.split('\n').map(l => l.length).sort());
             let l = s.split('\n');
-            this.bounds.x = l.map(l => l.length).sort().shift() * (this.font.char_width - 1) + 1;
+            this.bounds.x = l.map(l => l.length).sort().pop() * (this.font.char_width - 1) + 1;
             this.bounds.y = l.length * (this.font.char_height + 1);
             this.text = s;
         }
@@ -1824,11 +1879,35 @@ namespace g {
         }
     }
 
+    function apply_radial_damage(src: qf_actor, force = 300, radious = 50, damage = 1, cc = qf_cc.enemy) {
+        let w = src.world;
+        let p = src.get_pos();
+
+        for (let a of w.actors) {
+            if (a.root && (a.root.collision_mask & cc)) {
+                let dir = qm_sub(a.root.get_pos(), p);
+                if (qm_mag(dir) <= radious) {
+                    let m = a.getcmp(qi_ai_movement)[0];
+                    if (m) {
+                        m.vel = qm_clamp_mag(dir, force, 0);
+                    }
+                    if (damage > 0) {
+                        a.on_take_damage.broadcast(new qf_damage_event(damage, src, qm_unit(qm_scale(dir, -1))));
+                    }
+                }
+            }
+        }
+    }
+
     class qc_explosion_component extends qf_scene_component {
         public wants_tick = true;
         public duration = 0.11;
         public elpased = 0;
         public radious = 10;
+
+        public begin_play() {
+            apply_radial_damage(this.owner, 200, this.radious, 1);
+        }
 
         public tick(delta: number) {
             if (this.elpased > this.duration) {
@@ -1864,18 +1943,7 @@ namespace g {
         protected elapsed = 0;
 
         public begin_play(): void {
-            // g_time_dilation = 0.1;
-            // this.get_timer().delay(this.slomo_duration, _ => g_time_dilation = 1, this);
-
-            let w = this.get_world();
-            let t = this.get_timer();
-
-            for (let a of w.actors) {
-                let m = a.getcmp(qi_ai_movement)[0];
-                if (a.root && m) {
-                    m.vel = qm_clamp_mag(qm_sub(a.get_pos(), this.pos), 600, 0);
-                }
-            }
+            apply_radial_damage(this.owner, 600, 99999, 0);
         }
 
         public tick(delta: number): void {
@@ -2100,14 +2168,19 @@ namespace g {
         private weapon_sprite: qc_sprite_component;
         private stats: qc_label_component;
 
+        // bullet setup
         public bullet_speed = 300;
         public fire_spread = 5;
         public bullets_per_shoot = 1;
         public explosion_chance = 0.1;
         public bullet_damage = 1;
 
+        // other setup
+        public gems_per_kill = 3;
+
         public life = 2;
         public gem_count = 0;
+        public should_take_damage = true;
         public wants_tick = true;
 
         protected fire_rate = 4;
@@ -2124,10 +2197,10 @@ namespace g {
             this.set_fire_rate(this.fire_rate);
 
             // #DEBUG-BEGIN
-            qs_input.keyboard.bind_keydown('1', _ => g_world.actors.forEach(a => a.getcmp(qi_enemy_controller)[0] ? a.destroy() : 1), this);
+            qs_input.keyboard.bind_keydown('1', _ => g_world.actors.forEach(a => a.getcmp(qi_enemy_controller)[0] ? a.on_take_damage.broadcast(new qf_damage_event(9999, this.owner, qm_up)) : 1), this);
             qs_input.keyboard.bind_keydown('2', _ => reset(), this);
             qs_input.keyboard.bind_keydown('3', _ => g_game_mode.spawn_wave(), this);
-            qs_input.keyboard.bind_keydown('5', _ => qm_rnd_select(spawn_bat, spawn_humanoid)(g_world, v2(30, 30)), this);
+            qs_input.keyboard.bind_keydown('5', _ => qm_rnd_select(spawn_bat, spawn_goblin)(g_world, v2(30, 30)), this);
             // #DEBUG-END
         }
 
@@ -2162,13 +2235,35 @@ namespace g {
         }
 
         protected take_damage(e: qf_damage_event): void {
+            if (!this.should_take_damage) {
+                return;
+            }
+
             this.movement.vel.x += e.dir.x * 100;
             this.movement.vel.y -= 100;
-            // this.sprite.blink();
+            this.sprite.blink();
+
+            this.life -= 1;
             spawn_freeze_wave(this.get_world(), qm_add(this.owner.get_pos(), v2(0, 3)));
-            // just for shake
-            spawn_explosion(this.get_world(), {x:-100, y:-100, duration: 0.1});
-            // reset();
+
+            if (this.life > 0) {
+                // just for shake
+                spawn_explosion(this.get_world(), {x:-100, y:-100, duration: 0.1});
+                // invicibly frame
+                this.should_take_damage = false;
+                this.get_timer().delay(0.5, _ => this.should_take_damage = true, this);
+            }
+            else {
+                this.get_timer().delay(0.05, _ => {
+                    this.get_world().actors.forEach(a => a.getcmp(qc_wave_component)[0] && a.destroy());
+                    g_time_dilation = 0.01;
+                }, this.owner);
+                let msg = qf_attach_prim(this.owner, new qc_label_component(), {x: g_canvas.width/4, y: g_canvas.height/4});
+                msg.set_text(`    you died\nwaves survived: ${g_stage}\n\npress z to restart`);
+                qs_input.keyboard.bind_keydown('z', _ => reset(), this.owner);
+                this.owner.components = this.owner.components.filter(c => {
+                    return !((c instanceof qc_player_movement) || (c instanceof qc_player_controller)); });
+            }
         }
 
         public set_fire_rate(rate: number): void {
@@ -2194,7 +2289,7 @@ namespace g {
                 spawn_bullet(a.world, this.weapon_sprite.get_pos(), 
                     qm_scale(dir, this.bullet_speed * 1 / g_time_dilation), this.owner,
                     {
-                        lifespan: 0.3, gravity: 0, cc: qf_cc.pawn | qf_cc.geom,
+                        lifespan: 0.3, gravity: 0, cc: qf_cc.enemy | qf_cc.geom,
                         damage: this.bullet_damage,
                         explosion_chance: this.explosion_chance
                     });
@@ -2215,6 +2310,7 @@ namespace g {
                 case qg_item_type.bullet_range_upgrade: this.bullet_speed += 50; return;
                 case qg_item_type.fire_rate_upgrade: this.set_fire_rate(this.fire_rate + 2); return;
                 case qg_item_type.life_upgrade: this.life += 1; return;
+                case qg_item_type.coin_drop_upgrade: this.gems_per_kill += 2; return;
             }
             qu_assert(false);
         }
@@ -2231,7 +2327,15 @@ namespace g {
             [[spawn_slime, 8], [spawn_bat, 4]],
             [[spawn_slime, 0], [spawn_bat, 8]],
             [],
-            [[spawn_humanoid, 2]]
+            [[spawn_boss1, 1]],
+            [],
+            [[spawn_goblin, 2], [spawn_bat, 4]],
+            [[spawn_goblin, 4], [spawn_bat, 4]],
+            [],
+            [[spawn_goblin, 2], [spawn_boss1, 1]],
+            [[spawn_goblin, 8], [spawn_bat, 0]],
+            [],
+            [[spawn_boss1, 2]] 
         ];
 
         public spawned_actors: qf_actor[] = [];
@@ -2244,7 +2348,7 @@ namespace g {
         public on_enemy_killed(e: qf_actor): void {
             if (this.is_shopping_time()) {
                 g_stage += 1;
-                this.spawned_actors.forEach(a => a.destroy());
+                this.spawned_actors.forEach(a => a.is_valid() && a.destroy());
                 this.get_timer().delay(3, this.spawn_wave, this);
             }
             else if (this.spawned_actors.every(a => !a.is_valid() || a === e)) {
@@ -2262,19 +2366,36 @@ namespace g {
             this.spawned_actors = [];
 
             if (this.is_shopping_time()) {
+                let upg = [];
+                for (let i = 0; i < qg_item_type.max_none; ++i) {
+                    upg[i] = i;
+                }
                 for (let pos of g_item_positions) {
-                    this.spawned_actors.push(spawn_shop_item(w, pos));
+                    let idx = qm_rnd(0, upg.length - 1);
+                    this.spawned_actors.push(spawn_shop_item(w, {x: pos.x, y: pos.y, item: upg[idx]}));
+                    upg.splice(idx, 1);
                 }
                 this.spawned_actors.push(spawn_vendor(w, g_npc_positions[0]));
                 this.get_timer().delay(10, this.on_enemy_killed, this);
             }
 
-            for (let [spawn_fn, num] of wave) {
+            for (let [_, num] of wave) {
                 for (let i = 0; i < num; ++i) {
-                    this.spawned_actors.push(spawn_fn(w, g_spawn_positions[spawn_num % point_num]));
+                    let p = g_spawn_positions[spawn_num % point_num];
+                    spawn_spawn_portal(w, p);
                     spawn_num += 1;
                 }
             }
+
+            this.get_timer().delay(1, _ => {
+                spawn_num = 0;
+                for (let [spawn_fn, num] of wave) {
+                    for (let i = 0; i < num; ++i) {
+                        this.spawned_actors.push(spawn_fn(w, g_spawn_positions[spawn_num % point_num]));
+                        spawn_num += 1;
+                    }
+                }
+            }, this);
         }
 
         protected is_shopping_time(): boolean {
@@ -2287,7 +2408,14 @@ namespace g {
     const qi_g_on_enemy_killed = new qf_multicast_delegate<(a: qf_actor) => void>();
 
     function qi_flying_path_filter(geom: qf_tile_geometry, s: qm_vec, e: qm_vec): boolean {
-        return !geom.is_blocking(e.x, e.y);
+        if (geom.is_blocking(e.x, e.y)) return false;
+        // let d = qm_sub(e, s);
+        // // if moving diagonal
+        // if (qm_manhattan_dist(d) == 2) {
+        //     // forbid if near blocking geom
+        //     if (geom.is_blocking(e.x, s.y)) return false;
+        // }
+        return true;
     }
 
     function qi_default_walk_filter(geom: qf_tile_geometry, s: qm_vec, e: qm_vec): boolean {
@@ -2338,6 +2466,10 @@ namespace g {
 
             if (this.flying) {
                 this.acc = qm_scale(this.input, this.air_acc);
+                let wall = this.trace_wall(3);
+                if (wall) {
+                    this.vel.x = wall[1].x * 80;
+                }
                 return;
             }
 
@@ -2381,8 +2513,9 @@ namespace g {
 
         public target: qf_actor;
         public hitpoints = 1;
-        public max_hitpoints = 1;
         public base_damage = 1;
+        public gems = 1;
+
         public atk_speed = 0.5;
         public atk_lock = false;
 
@@ -2398,7 +2531,6 @@ namespace g {
             this.root = this.owner.root;
             this.owner.on_take_damage.bind(this.take_damage, this);
             this.get_timer().every(0.1, this.update, this);
-            this.get_timer().delay(0, _ => this.hitpoints += g_stage, this);
         }
 
         protected update(): void {
@@ -2428,14 +2560,18 @@ namespace g {
 
         public handle_death(): void {
             let w = this.get_world();
-            let c = w.actors.filter(a => a.getcmp(qi_enemy_controller)[0]);
 
-            for (let i = qm_rnd(1, 3); i >= 0; --i) {
+            for (let i = qm_rnd(this.gems, this.gems + g_player_controller.gems_per_kill); i >= 0; --i) {
                 let coin = spawn_coin(w, this.owner.get_pos()).getcmp(qc_projectile_movement)[0];
                 let lh = this.last_hit.dir;
                 coin.vel.x = (lh.x != 0 ? lh.x : 1) * -qm_rnd(100, 200);
                 coin.vel.y = qm_rnd(200, 400);
             }
+
+            if (g_time_dilation < 1) {
+                spawn_freeze_wave(w, this.owner.get_pos());
+            }
+
             qi_g_on_enemy_killed.broadcast(this.owner);
             this.owner.destroy();
         }
@@ -2487,7 +2623,6 @@ namespace g {
         public begin_play() {
             super.begin_play()
             this.think_event = this.get_timer().every(0.033, this.think, this);
-            // this.get_timer().every(1, this.try_fire, this);
         }
 
         public think(delta: number) {
@@ -2508,21 +2643,7 @@ namespace g {
             }
         }
 
-        public try_fire(): void {
-            if (!this.mov.on_ground) return;
 
-            let w = this.get_world();
-            let this_pos = this.owner.get_pos();
-            let trg_pos = this.target.get_pos();
-            let hit = w.sweep_aabb(this_pos, trg_pos, v2(5, 5), qf_cc.geom | qf_cc.player);
-            if (hit && hit.actor) {
-                this.think_event.fire_in = 1;
-                this.mov.input = v2();
-                this.mov.vel.x = 0;
-                let dir = qm_sub(trg_pos, this_pos);
-                spawn_bullet(w, this_pos, dir, this.owner, {lifespan: 3, gravity: 0, cc: qf_cc.player | qf_cc.geom});
-            }
-        }
 
         public take_damage(e: qf_damage_event): void {
             this.think_event.fire_in = 0.5 * this.dimishing_return;
@@ -2532,6 +2653,37 @@ namespace g {
 
             this.dimishing_return = qm_clamp(this.dimishing_return - 0.1, 0, 1);
             super.take_damage(e);
+        }
+    }
+
+    class qc_boss_controller extends qi_humanoid_controller {
+
+        public begin_play() {
+            super.begin_play();
+            this.get_timer().every(5, _ => {
+                for (let i = 0; i < 3; ++i)
+                    this.get_timer().delay(0.1 * i, this.try_fire, this);
+                }, this);
+        }
+
+        public think(delta: number) {
+            super.think(delta);
+            this.spr.play('walk');            
+            this.dimishing_return = 0;
+        }
+
+        public try_fire(): void {
+            let w = this.get_world();
+            let this_pos = this.owner.get_pos();
+            let trg_pos = this.target.get_pos();
+
+            this.think_event.fire_in = 0.5;
+            this.spr.play('fire');            
+            this.mov.input = v2();
+            this.mov.vel = v2();
+
+            let dir = qm_clamp_mag(qm_sub(trg_pos, this_pos), 200);
+            spawn_bullet(w, this_pos, dir, this.owner, { lifespan: 3, gravity: 0, cc: qf_cc.player});
         }
     }
 
@@ -2555,7 +2707,7 @@ namespace g {
     function spawn_slime(world: qf_world, {x, y}): qf_actor
     {
         let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.pawn, root: true});
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.enemy, root: true});
         r.bounds = v2(9, 6);
         r.sequences['idle'] = new qr_sprite_sequence(g_character_spritesheet, [4, 5], [.12, .12]);
         r.sequences['idle'].loop = true; 
@@ -2563,14 +2715,15 @@ namespace g {
         r.offset.y -= 3;
     
         qf_attach_cmp(a, new qi_ai_movement());
-        qf_attach_cmp(a, new qi_slime_controller());
+        let c = qf_attach_cmp(a, new qi_slime_controller());
+        c.hitpoints = 2;
         return a;
     }
 
-    function spawn_humanoid(world: qf_world, {x, y}): qf_actor
+    function spawn_goblin(world: qf_world, {x, y}): qf_actor
     {
         let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.pawn, root: true});
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.enemy, root: true});
         r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [2, 3]);
         r.sequences['walk'].loop = true;
         r.sequences['walk'].set_duration(0.15);
@@ -2583,28 +2736,65 @@ namespace g {
         // mov.max_velocity_on_ground =  50;
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
         h.hitpoints = 4;
-        h.max_hitpoints = 3;
         return a;
     }
 
     function spawn_bat(world: qf_world, {x, y}): qf_actor
     {
         let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.pawn, height: 12, root: true});
-        r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [6, 7]);
-        r.sequences['walk'].loop = true;
-        r.sequences['walk'].set_duration(0.25);
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.enemy, height: 12, root: true});
+        let w = r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [6, 7]);
+        w.loop = true;
+        w.set_duration(0.25);
         r.play('walk');
 
         let mov = qf_attach_cmp(a, new qi_ai_movement());
         mov.gravity = 0;
         mov.flying = true;
         mov.bounce_off_wall = true;
-        mov.default_max_velocity = 100;
+        mov.default_max_velocity = 60;
 
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
-        h.hitpoints = 4;
+        h.hitpoints = 3;
         h.path_filter = qi_flying_path_filter;
+        return a;
+    }
+
+    function spawn_boss1(world: qf_world, {x, y}): qf_actor
+    {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.enemy, height: 14, width: 13, root: true});
+        let w = r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [37, 38]);
+        w.loop = true;
+        w.set_duration(0.25);
+        r.play('walk');
+        r.offset.y = -1;
+        r.sequences['fire'] = new qr_sprite_sequence(g_character_spritesheet, [36]);
+        // r.scale = v2(2, 2);
+
+        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        mov.gravity = 0;
+        mov.flying = true;
+        mov.bounce_off_wall = true;
+        mov.default_max_velocity = 50;
+
+        let h = qf_attach_cmp(a, new qc_boss_controller());
+        h.hitpoints = 20;
+        h.gems = 30;
+        h.path_filter = qi_flying_path_filter;
+        return a;
+    }
+
+    function spawn_spawn_portal(world: qf_world, { x, y }): qf_actor {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, root: true });
+        let w = r.sequences['1'] = new qr_sprite_sequence(g_character_spritesheet, [8, 13]);
+        w.loop = true;
+        w.set_duration(0.02);
+        r.play('1');
+        r.offset.y = -1;
+
+        world.timer.delay(1, _ => a.destroy(), a);
         return a;
     }
 
@@ -2635,22 +2825,23 @@ namespace g {
 
     function spawn_explosion(world: qf_world, {x, y, radious = 15, duration = 0.11}): qf_actor {
         let a = world.spawn_actor();
-        let e = qf_attach_prim(a, new qc_explosion_component(), {x, y});
+        let e = qf_attach_prim(a, new qc_explosion_component(), {x, y, root: true});
         e.radious = (qm_rnd_normal() + 1) * radious;
         e.duration = duration;
         return a;
     }
 
-    function spawn_shop_item(world: qf_world, {x, y}): qf_actor {
+    function spawn_shop_item(world: qf_world, {x, y, item = qg_item_type.max_none}): qf_actor {
         let a = world.spawn_actor();
         let s = qf_attach_prim(a, new qc_sprite_component(), {x, y, width: 14, height: 16, root: true});
         s.sprite = g_character_spritesheet.get_sprite(34);
 
         let item_type = qm_rnd(0, qg_item_type.max_none)|0 as qg_item_type;
 
-        let l = qf_attach_prim(a, new qc_label_component(), {y: -20});
+        let cost = get_item_cost(item_type) / 10;
+        let l = qf_attach_prim(a, new qc_label_component(), {y: -25});
         l.parent = s;
-        l.set_text(get_item_desc(item_type) + '\ncost: ' + get_item_cost(item_type).toFixed(0));
+        l.set_text(get_item_desc(item_type) + '\ncost: ' + cost + '\njump to buy');
         l.visible = false;
 
         let p = qf_attach_cmp(a, new qc_pickable_component());
@@ -2660,9 +2851,12 @@ namespace g {
         let p2 = qf_attach_cmp(a, new qc_pickable_component());
         p2.bounds = [v2(x, y - 40), v2(10, 10)];
         p2.on_overlap_begins.bind(_ => {
-            spawn_freeze_wave(world, {x, y});
-            world.player.getcmp(qc_player_controller)[0].apply_upgrade(item_type);
-            a.destroy()
+            if (g_player_controller.gem_count >= cost) {
+                spawn_freeze_wave(world, {x, y});
+                world.player.getcmp(qc_player_controller)[0].apply_upgrade(item_type);
+                a.destroy()
+                g_player_controller.gem_count -= cost;
+            }
         }, p2);
 
         // let t = qf_attach_cmp(a, new qc_tween_manager());
@@ -2675,7 +2869,7 @@ namespace g {
 
     function spawn_vendor(world: qf_world, {x, y}): qf_actor {
         let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.pawn, height: 12, root: true});
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.enemy, height: 12, root: true});
         r.offset.y = -2;
         let idle = r.sequences['idle'] = new qr_sprite_sequence(g_character_spritesheet, [14, 15]);
         idle.loop = true;
@@ -2769,7 +2963,7 @@ namespace g {
                 }
             }
 
-            ctx.strokeStyle = 'green';
+            ctx.strokeStyle = 'yellow';
             for (let path of qi_g_paths) {
                 if (path.length == 0) continue;
                 ctx.beginPath();
@@ -2814,7 +3008,7 @@ namespace g {
         r.pos = loc;
         r.bounds = v2(8, 6);
         r.sequences['fire'] = new qr_sprite_sequence(g_character_spritesheet, [27, 28], [0.02, 1]);
-        r.sequences['explode'] = new qr_sprite_sequence(g_character_spritesheet, [29, 30, qm_rnd_select(31, 32), 8], [0.03, 0.03, 0.05, 1]);
+        r.sequences['explode'] = new qr_sprite_sequence(g_character_spritesheet, [29, 30, qm_rnd_select(31, 32), 62], [0.03, 0.03, 0.05, 1]);
         r.play('fire');
 
         let p = new qc_projectile_movement();
@@ -2927,7 +3121,7 @@ namespace g {
         bullet_damage_upgrade,
         bullet_num_upgrade,
         bullet_explosion_upgrade,
-        bullet_knockback_upgrade,
+        // bullet_knockback_upgrade,
 
         life_upgrade,
         coin_drop_upgrade,
@@ -2941,7 +3135,7 @@ namespace g {
             case qg_item_type.bullet_damage_upgrade:    return 'increased bullet damage';
             case qg_item_type.bullet_num_upgrade:       return 'increased bullet num';
             case qg_item_type.bullet_explosion_upgrade: return 'increased explosion chance';
-            case qg_item_type.bullet_knockback_upgrade: return 'increased bullet knockback';
+            // case qg_item_type.bullet_knockback_upgrade: return 'increased bullet knockback';
 
             case qg_item_type.life_upgrade:             return 'life';
             case qg_item_type.coin_drop_upgrade:        return 'increased coin drop';
@@ -2949,14 +3143,14 @@ namespace g {
     }
     function get_item_cost(i: qg_item_type): number {
         switch (i) {
-            case qg_item_type.fire_rate_upgrade:       return 10;
-            case qg_item_type.bullet_range_upgrade:    return 10;
-            case qg_item_type.bullet_damage_upgrade:   return 50;
-            case qg_item_type.bullet_num_upgrade:      return 100;
+            case qg_item_type.fire_rate_upgrade:       return 20;
+            case qg_item_type.bullet_range_upgrade:    return 20;
+            case qg_item_type.bullet_damage_upgrade:   return 100;
+            case qg_item_type.bullet_num_upgrade:      return 200;
             case qg_item_type.bullet_explosion_upgrade:return 50;
-            case qg_item_type.bullet_knockback_upgrade:return 80;
+            // case qg_item_type.bullet_knockback_upgrade:return 80;
 
-            case qg_item_type.life_upgrade:            return 100;
+            case qg_item_type.life_upgrade:            return 50;
             case qg_item_type.coin_drop_upgrade:       return 100;
         }
     }
@@ -2971,6 +3165,7 @@ namespace g {
     function tick()
     {
         g_world.tick(0.016 * g_time_dilation);
+
         g_context.save()
         g_context.clearRect(0, 0, g_canvas.width, g_canvas.height);
         g_context.translate(g_scene_offset.x, g_scene_offset.y);
@@ -2978,6 +3173,10 @@ namespace g {
         qr_render_w(g_context, g_world);
 
         g_context.restore();
+
+        // #DEBUG-BEGIN
+        qs_input.keyboard.poll_gamepad();
+        // #DEBUG-END
         window.requestAnimationFrame(tick);
     }
 
@@ -3000,15 +3199,15 @@ namespace g {
 1                                 0
 1 s                             s 0
 10000         111111           0000
-1         1              1        0
-1                                 0
+1         1                       0
+1                           1     0
 1   0                             0
-1   0        1                    0
 1   0                             0
-1   0  s                   s      0
-1   0  i                   i      0
-1   1010101     s      01010110   0
-1               i   n             0
+1   0                             0
+1   0                             0
+1   0 si                   is     0
+1   1010101            01010110   0
+1               is  n             0
 1            10101010             0
 1                                 0
 1  s            @              s  0
