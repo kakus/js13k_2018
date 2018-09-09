@@ -256,8 +256,13 @@ namespace g {
         return typeof obj[<any>name] == 'function';
     }
 
-    function qu_assert(cond: boolean, msg = `Assert failed`)
-    {
+    function qu_log(...msg: any[]): void {
+        // #DEBUG-BEGIN
+        console.log(...msg);
+        // #DEBUG-END
+    }
+
+    function qu_assert(cond: boolean, msg = `Assert failed`) {
         // #DEBUG-BEGIN
         if (!cond) throw new Error(msg);
         // #DEBUG-END
@@ -547,75 +552,75 @@ namespace g {
         return (1 - Math.cos(Math.PI * t)) / 2;
     }
 
-    class qf_tween {
-        protected next: qf_tween;
-        protected prev: qf_tween;
-        protected total_elapsed = 0;
-        protected do_loop = false;
+    // class qf_tween {
+    //     protected next: qf_tween;
+    //     protected prev: qf_tween;
+    //     protected total_elapsed = 0;
+    //     protected do_loop = false;
 
-        constructor(
-            readonly obj: Object,
-            readonly prop: string | symbol | number,
-            readonly start_value: number,
-            readonly end_value: number,
-            readonly duration: number,
-            readonly easing: (a: number) => number,
-        ) {
-            qu_assert(!!obj);
-            qu_assert(typeof obj[prop] === 'number');
-            qu_assert(duration > 0);
-        }
+    //     constructor(
+    //         readonly obj: Object,
+    //         readonly prop: string | symbol | number,
+    //         readonly start_value: number,
+    //         readonly end_value: number,
+    //         readonly duration: number,
+    //         readonly easing: (a: number) => number,
+    //     ) {
+    //         qu_assert(!!obj);
+    //         qu_assert(typeof obj[prop] === 'number');
+    //         qu_assert(duration > 0);
+    //     }
 
-        public tick(delta: number): void {
-            this.total_elapsed += delta;
-            let e = this.total_elapsed;
+    //     public tick(delta: number): void {
+    //         this.total_elapsed += delta;
+    //         let e = this.total_elapsed;
 
-            for (let self: qf_tween = this; self; self = self.next) {
-                if (e < self.duration) {
-                    let a = qm_clamp(e / self.duration, 0, 1);
-                    self.obj[self.prop] = self.start_value + (self.end_value - self.start_value) * self.easing(a);
-                    break;
-                } else {
-                    self.obj[self.prop] = self.end_value;
-                    e -= self.duration;
+    //         for (let self: qf_tween = this; self; self = self.next) {
+    //             if (e < self.duration) {
+    //                 let a = qm_clamp(e / self.duration, 0, 1);
+    //                 self.obj[self.prop] = self.start_value + (self.end_value - self.start_value) * self.easing(a);
+    //                 break;
+    //             } else {
+    //                 self.obj[self.prop] = self.end_value;
+    //                 e -= self.duration;
 
-                    if (self.do_loop) {
-                        this.total_elapsed = 0;
-                        break;
-                    }
-                }
-            }
-        }
+    //                 if (self.do_loop) {
+    //                     this.total_elapsed = 0;
+    //                     break;
+    //                 }
+    //             }
+    //         }
+    //     }
 
-        public then<T>(obj: T, prop: keyof T, start_value: number, end_value: number, duration: number, easing = qf_easing_sin_inout): qf_tween {
-            let t = new qf_tween(obj, prop, start_value, end_value, duration, easing);
-            t.prev = this;
-            this.next = t;
-            return t;
-        }
+    //     public then<T, K extends keyof T>(obj: T, prop: K, start_value: number, end_value: number, duration: number, easing = qf_easing_sin_inout): qf_tween {
+    //         let t = new qf_tween(obj, prop, start_value, end_value, duration, easing);
+    //         t.prev = this;
+    //         this.next = t;
+    //         return t;
+    //     }
 
-        public loop(): qf_tween { this.do_loop = true; return this.get_head(); }
+    //     public loop(): qf_tween { this.do_loop = true; return this.get_head(); }
 
-        public get_head() {
-            for (let s: qf_tween = this; s; s = s.prev) {
-                if (!s.prev) return s;
-            }
-        }
-        public is_tail() { return !this.next; }
-        public is_head() { return !this.prev; }
+    //     public get_head() {
+    //         for (let s: qf_tween = this; s; s = s.prev) {
+    //             if (!s.prev) return s;
+    //         }
+    //     }
+    //     public is_tail() { return !this.next; }
+    //     public is_head() { return !this.prev; }
 
-        public total_duration(): number {
-            let dur = 0;
-            for (let self: qf_tween = this; self; self = self.next) {
-                dur += self.duration;
-            }
-            return dur;
-        }
+    //     public total_duration(): number {
+    //         let dur = 0;
+    //         for (let self: qf_tween = this; self; self = self.next) {
+    //             dur += self.duration;
+    //         }
+    //         return dur;
+    //     }
 
-        public is_done(): boolean {
-            return this.total_elapsed / this.total_duration() >= 1;
-        }
-    }
+    //     public is_done(): boolean {
+    //         return this.total_elapsed / this.total_duration() >= 1;
+    //     }
+    // }
 
     const enum qf_timer_type
     {
@@ -1274,7 +1279,10 @@ namespace g {
                 b.bind(fn, owner);
             }
 
-            export function is_down(key: key) { return state[key] ? state[key].is_down : false; }
+            export function is_down(key: key) { 
+                return state[key] ? state[key].is_down : false; 
+            }
+
             export function get_state(key: key | string): key_state { 
                 let s = state[key];
                 if (!s) state[key] = s = new key_state();
@@ -1802,10 +1810,17 @@ namespace g {
     }
 
     class qc_label_component extends qf_scene_component {
-        public text = '';
+        protected text = '';
         public font = qr_pixel_font;
+        public set_text(s: string): void {
+            // qu_log(s, s.split('\n').map(l => l.length).sort());
+            let l = s.split('\n');
+            this.bounds.x = l.map(l => l.length).sort().shift() * (this.font.char_width - 1) + 1;
+            this.bounds.y = l.length * (this.font.char_height + 1);
+            this.text = s;
+        }
         public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
-            qr_render_string(this.font, ctx, this.text);
+            qr_render_string(this.font, ctx, this.text, qm_scale(this.bounds, -0.5));
         }
     }
 
@@ -1940,24 +1955,24 @@ namespace g {
         }
     }
 
-    class qc_tween_manager extends qf_component_base {
-        public tweens: qf_tween[] = [];
-        public wants_tick = true;
+    // class qc_tween_manager extends qf_component_base {
+    //     public tweens: qf_tween[] = [];
+    //     public wants_tick = true;
 
-        public tick(delta: number): void {
-            for (let i = this.tweens.length - 1; i >= 0; --i) {
-                this.tweens[i].tick(delta);
-                if (this.tweens[i].is_done()) {
-                    this.tweens.splice(i, 1);
-                }
-            }
-        }
-        public make<T>(obj: T, prop: keyof T, start_value: number, end_value: number, duration: number, easing = qf_easing_sin_inout): qf_tween {
-            let t = new qf_tween(obj, prop, start_value, end_value, duration, easing);
-            this.tweens.push(t);
-            return t;
-        }
-    }
+    //     public tick(delta: number): void {
+    //         for (let i = this.tweens.length - 1; i >= 0; --i) {
+    //             this.tweens[i].tick(delta);
+    //             if (this.tweens[i].is_done()) {
+    //                 this.tweens.splice(i, 1);
+    //             }
+    //         }
+    //     }
+    //     public make<T, K extends keyof T>(obj: T, prop: K, start_value: number, end_value: number, duration: number, easing = qf_easing_sin_inout): qf_tween {
+    //         let t = new qf_tween(obj, prop, start_value, end_value, duration, easing);
+    //         this.tweens.push(t);
+    //         return t;
+    //     }
+    // }
 
     class qc_player_movement extends qc_character_movement
     {
@@ -2142,7 +2157,8 @@ namespace g {
                 this.fire_delegate();
             }
 
-            this.stats.text = `lives: ${this.life}\ngems:  ${this.gem_count}\nwave:  ${g_stage}`;
+            this.stats.set_text(`lives: ${this.life}\ngems:  ${this.gem_count}\nwave:  ${g_stage}`);
+            this.stats.pos = qm_add(v2(20, 20), qm_scale(this.stats.bounds, 0.5));
         }
 
         protected take_damage(e: qf_damage_event): void {
@@ -2209,16 +2225,33 @@ namespace g {
     class qc_game_mode extends qf_component_base {
 
         protected wave_def: wave_spawn_def[][] = [
+            [[spawn_slime, 2], [spawn_bat, 1]],
             [[spawn_slime, 4], [spawn_bat, 2]],
-            [[spawn_slime, 8], [spawn_bat, 4]]
+            [],
+            [[spawn_slime, 8], [spawn_bat, 4]],
+            [[spawn_slime, 0], [spawn_bat, 8]],
+            [],
+            [[spawn_humanoid, 2]]
         ];
+
+        public spawned_actors: qf_actor[] = [];
         
         public begin_play(): void {
             qi_g_on_enemy_killed.bind(this.on_enemy_killed, this);
+            this.get_timer().delay(1, this.spawn_wave, this);
         }
 
         public on_enemy_killed(e: qf_actor): void {
-
+            if (this.is_shopping_time()) {
+                g_stage += 1;
+                this.spawned_actors.forEach(a => a.destroy());
+                this.get_timer().delay(3, this.spawn_wave, this);
+            }
+            else if (this.spawned_actors.every(a => !a.is_valid() || a === e)) {
+                qu_log(`wave ${g_stage} finished`);
+                g_stage += 1;
+                this.get_timer().delay(3, this.spawn_wave, this);
+            }
         }
 
         public spawn_wave(): void {
@@ -2226,12 +2259,26 @@ namespace g {
             let wave = this.wave_def[g_stage % this.wave_def.length];
             let point_num = g_spawn_positions.length;
             let spawn_num = 0;
+            this.spawned_actors = [];
+
+            if (this.is_shopping_time()) {
+                for (let pos of g_item_positions) {
+                    this.spawned_actors.push(spawn_shop_item(w, pos));
+                }
+                this.spawned_actors.push(spawn_vendor(w, g_npc_positions[0]));
+                this.get_timer().delay(10, this.on_enemy_killed, this);
+            }
 
             for (let [spawn_fn, num] of wave) {
                 for (let i = 0; i < num; ++i) {
-                    spawn_fn(w, g_spawn_positions[i % point_num]);
+                    this.spawned_actors.push(spawn_fn(w, g_spawn_positions[spawn_num % point_num]));
+                    spawn_num += 1;
                 }
             }
+        }
+
+        protected is_shopping_time(): boolean {
+            return this.wave_def[g_stage % this.wave_def.length].length === 0;
         }
     }
 
@@ -2337,9 +2384,8 @@ namespace g {
         public max_hitpoints = 1;
         public base_damage = 1;
         public atk_speed = 0.5;
+        public atk_lock = false;
 
-
-        protected atk_lock = false;
         protected last_hit: qf_damage_event;
 
         public begin_play()
@@ -2445,6 +2491,10 @@ namespace g {
         }
 
         public think(delta: number) {
+            if (this.atk_lock) {
+                return;
+            }
+
             this.dimishing_return = qm_clamp(this.dimishing_return + 0.01, 0, 1);
 
             let g = this.owner.world.geometry as qf_tile_geometry;
@@ -2493,8 +2543,10 @@ namespace g {
     const g_negative_spritesheet_image = qr_create_canvas(128, 128);
     const g_character_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 18), v2(9, 9));
     const g_tile_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 14), v2(9, 10));
-    let g_stage = 1;
+    let g_stage = 0;
     let g_spawn_positions: qm_vec[] = [];
+    let g_item_positions: qm_vec[] = [];
+    let g_npc_positions: qm_vec[] = [];
     let g_scene_offset = v2();
 
     /**
@@ -2546,7 +2598,8 @@ namespace g {
 
         let mov = qf_attach_cmp(a, new qi_ai_movement());
         mov.gravity = 0;
-        mov.flying = true; 
+        mov.flying = true;
+        mov.bounce_off_wall = true;
         mov.default_max_velocity = 100;
 
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
@@ -2595,9 +2648,9 @@ namespace g {
 
         let item_type = qm_rnd(0, qg_item_type.max_none)|0 as qg_item_type;
 
-        let l = qf_attach_prim(a, new qc_label_component(), {y: -40, x: -26});
+        let l = qf_attach_prim(a, new qc_label_component(), {y: -20});
         l.parent = s;
-        l.text = get_item_desc(item_type) + '\n      cost: ' + get_item_cost(item_type).toFixed(0);
+        l.set_text(get_item_desc(item_type) + '\ncost: ' + get_item_cost(item_type).toFixed(0));
         l.visible = false;
 
         let p = qf_attach_cmp(a, new qc_pickable_component());
@@ -2612,11 +2665,41 @@ namespace g {
             a.destroy()
         }, p2);
 
-        let t = qf_attach_cmp(a, new qc_tween_manager());
-        t.make(s.offset, 'y', 0, -10, 1)
-         .then(s.offset, 'y', -10, 0, 1)
-         .loop()
+        // let t = qf_attach_cmp(a, new qc_tween_manager());
+        // t.make(s.offset, 'y', 0, -10, 1)
+        //  .then(s.offset, 'y', -10, 0, 1)
+        //  .loop();
 
+        return a;
+    }
+
+    function spawn_vendor(world: qf_world, {x, y}): qf_actor {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.pawn, height: 12, root: true});
+        r.offset.y = -2;
+        let idle = r.sequences['idle'] = new qr_sprite_sequence(g_character_spritesheet, [14, 15]);
+        idle.loop = true;
+        idle.set_duration(0.5);
+        r.play('idle');
+
+        let walk = r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [16, 17]);
+        walk.loop = true;
+        walk.set_duration(0.25);
+
+        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        mov.max_velocity_on_ground *= 1.5;
+        mov.air_acc *= 1.5;
+
+        let h = qf_attach_cmp(a, new qi_humanoid_controller());
+        h.atk_lock = true;
+        h.hitpoints = 999;
+
+        let l = qf_attach_prim(a, new qc_label_component(), {y:-20});
+        l.parent = r;
+        l.set_text(qm_rnd_select('shopping time', 'only best deals', 'sale sale!'));
+        world.timer.delay(2, _ => l.visible = false, a);
+
+        a.on_take_damage.bind(_ => { h.atk_lock = false; r.play('walk'); }, a);
         return a;
     }
 
@@ -2643,12 +2726,6 @@ namespace g {
             const tl = this.tiles.tile_size;
             ctx.strokeStyle = 'white';
             ctx.fillStyle = 'red';
-
-            // let to_local = this.get_world_transform();
-            // mat_invert(to_local);
-
-            // const pos = transform(this.query_start.root.pos, to_local)
-            // const end = transform(input.mouse.pos, to_local);
 
             for (let x = 0; x < this.tiles.width; ++x) {
                 for (let y = 0; y < this.tiles.height; ++y) {
@@ -2686,7 +2763,8 @@ namespace g {
                 for (let act of this.owner.world.actors) {
                     for (let p of act.getcmp(qf_scene_component)) {
                         let h = qm_scale(p.bounds, 0.5);
-                        ctx.strokeRect(p.pos.x - h.x, p.pos.y - h.y, h.x * 2, h.y * 2);
+                        let pos = p.get_pos();
+                        ctx.strokeRect(pos.x - h.x, pos.y - h.y, h.x * 2, h.y * 2);
                     }
                 }
             }
@@ -2818,6 +2896,10 @@ namespace g {
         let x = 0, y = 0;
         let tile_map = world.spawn_actor();
 
+        g_spawn_positions = [];
+        g_item_positions  = [];
+        g_npc_positions   = [];
+
         for (let line of data.split('\n'))
         {
             x = 0;
@@ -2830,8 +2912,8 @@ namespace g {
                 }
                 if (char === '@') spawn_player(world, pos)
                 if (char === 's') g_spawn_positions.push(pos);
-                if (char === 'h') spawn_humanoid(world, pos);
-                if (char ==  'i') spawn_shop_item(world, pos);
+                if (char === 'n') g_npc_positions.push(pos);
+                if (char ==  'i') g_item_positions.push(pos);
                 x += 1;
             }
             y += 1;
@@ -2901,9 +2983,10 @@ namespace g {
 
     function reset() {
         if (g_world) {
-            console.log('score: ', g_stage);
+            qu_log('score: ', g_stage);
         }
-        g_stage = 1;
+        g_stage = 0;
+        g_time_dilation = 1;
         
         let t = new qf_tile_geometry(35, 18, 14);
 
@@ -2925,7 +3008,7 @@ namespace g {
 1   0  s                   s      0
 1   0  i                   i      0
 1   1010101     s      01010110   0
-1               i                 0
+1               i   n             0
 1            10101010             0
 1                                 0
 1  s            @              s  0

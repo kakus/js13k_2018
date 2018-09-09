@@ -27,10 +27,18 @@ java -jar compiler.jar \
    $OUTDIR/app.js
 
 echo -- Updating index.html so its load minified app
-sed -i "" s/app\.js/app.min.js/ $OUTDIR/index.html
+# sed -i "" s/app\.js/app.min.js/ $OUTDIR/index.html
+sed -i "" "s/ src=.*\"//" $OUTDIR/index.html
+sed -i "" "/<script/r $OUTDIR/app.min.js" $OUTDIR/index.html
+
+echo -- Minifying html
+html-minifier --collapse-whitespace --remove-comments --remove-optional-tags\
+              --remove-redundant-attributes --remove-script-type-attributes\
+              --remove-tag-whitespace --use-short-doctype --minify-css true\
+              -o $OUTDIR/index.html $OUTDIR/index.html
 
 echo -- Zipping
-zip -r -9 -x $OUTDIR/app.js -o $OUTDIR $OUTDIR
+zip -9 -x $OUTDIR/*.js -o $OUTDIR $OUTDIR/*
 
 echo -- Bundle Size
 ls -l "$OUTDIR.zip" | awk '{print $5 kB}'
