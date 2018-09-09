@@ -1,5 +1,5 @@
-var __;
-(function (__) {
+var g;
+(function (g_1) {
     // math
     class qm_vec {
         constructor(x, y) {
@@ -36,7 +36,7 @@ var __;
     function qm_mag_sqr(a) { return a.x * a.x + a.y * a.y; }
     function qm_mag(a) { return Math.sqrt(qm_mag_sqr(a)); }
     function qm_unit(a) { let m = qm_mag(a); return qm_scale(a, 1 / m); }
-    function qm_clamp_mag(a, min, max) {
+    function qm_clamp_mag(a, min, max = min) {
         let m = qm_mag(a);
         return m < min ? qm_scale(qm_unit(a), min) :
             m > max ? qm_scale(qm_unit(a), max) :
@@ -188,6 +188,11 @@ var __;
     function qu_has_method(obj, name) {
         return typeof obj[name] == 'function';
     }
+    function qu_log(...msg) {
+        // #DEBUG-BEGIN
+        console.log(...msg);
+        // #DEBUG-END
+    }
     function qu_assert(cond, msg = `Assert failed`) {
         // #DEBUG-BEGIN
         if (!cond)
@@ -244,6 +249,7 @@ var __;
         constructor() {
             this.name = '';
             this.wants_tick = false;
+            this.received_begin_play = false;
         }
         begin_play() { }
         get_world() { return this.owner.world; }
@@ -295,12 +301,6 @@ var __;
             return base;
         }
     }
-    class qf_rect_primitve extends qf_scene_component {
-        render_c2d_impl(ctx) {
-            ctx.fillStyle = this.fill_color;
-            ctx.fillRect(-this.bounds.x / 2, -this.bounds.y / 2, this.bounds.x, this.bounds.y);
-        }
-    }
     class qf_damage_event {
         constructor(damage, instigator, dir = v2()) {
             this.damage = damage;
@@ -314,7 +314,7 @@ var __;
             this.on_take_damage = new qf_multicast_delegate();
         }
         is_valid() {
-            return !!this.world;
+            return this.world && this.world === g_world;
         }
         destroy() {
             this.world.destroy_actor(this);
@@ -333,9 +333,6 @@ var __;
         cmp.owner = owner;
         cmp.name = name;
         owner.components.push(cmp);
-        if (owner.world.has_begun_play) {
-            cmp.begin_play();
-        }
         return cmp;
     }
     function qf_attach_prim(owner, prim, { x = 0, y = 0, width = 10, height = 10, root = false, coll_mask = 0 /* none */, name = '' }) {
@@ -352,12 +349,15 @@ var __;
         constructor() {
             this.actors = [];
             this.timer = new qf_timer();
-            this.has_begun_play = false;
         }
         tick(delta) {
             this.timer.tick(delta);
             for (let actor of this.actors) {
                 for (let cmp of actor.components) {
+                    if (!cmp.received_begin_play) {
+                        cmp.begin_play();
+                        cmp.received_begin_play = true;
+                    }
                     if (qf_has_tick_method(cmp)) {
                         cmp.tick(delta);
                     }
@@ -401,20 +401,24 @@ var __;
                 }
                 if (actor.root) {
                     let actor_aabb = actor.root.get_aabb(half_size);
-                    // if ((actor.root.collision_mask & channel) && qm_overlap_aabb(area, actor_aabb)) {
-                    if (actor.root.collision_mask & channel) {
+                    if ((actor.root.collision_mask & channel) && qm_overlap_aabb(area, actor_aabb)) {
                         let hit = qm_line_trace_aabb(start, end, actor_aabb);
                         if (hit) {
                             hits.push(new qf_hit_result(hit[0], hit[1], actor));
                         }
+                        else {
+                            hits.push(new qf_hit_result(start, qm_unit(qm_sub(start, end)), actor));
+                        }
                     }
-                    // }
                 }
             }
             return qu_greatest_element(hits, (a, b) => {
                 return qm_mag_sqr(qm_sub(a.pos, start)) > qm_mag_sqr(qm_sub(b.pos, start));
             });
         }
+    }
+    function qf_easing_sin_inout(t) {
+        return (1 - Math.cos(Math.PI * t)) / 2;
     }
     class qf_timer_event {
         constructor(owner, type, delay, fn, actor, ctx) {
@@ -490,6 +494,365 @@ var __;
         }
     }
     // render
+    let qr_pixel_font_data = {
+        char: {
+            width: 3,
+            height: 5
+        },
+        letters: {
+            '+': [
+                0, 0, 0,
+                0, 1, 0,
+                1, 1, 1,
+                0, 1, 0,
+                0, 0, 0
+            ],
+            '-': [
+                0, 0, 0,
+                0, 0, 0,
+                1, 1, 1,
+                0, 0, 0,
+                0, 0, 0
+            ],
+            '.': [
+                0, 0, 0,
+                0, 0, 0,
+                0, 0, 0,
+                0, 0, 0,
+                0, 1, 0
+            ],
+            ',': [
+                0, 0, 0,
+                0, 0, 0,
+                0, 0, 0,
+                0, 1, 0,
+                1, 0, 0
+            ],
+            ':': [
+                0, 0, 0,
+                0, 1, 0,
+                0, 0, 0,
+                0, 1, 0,
+                0, 0, 0
+            ],
+            '?': [
+                1, 1, 0,
+                0, 0, 1,
+                0, 1, 1,
+                0, 0, 0,
+                0, 1, 0
+            ],
+            '♥': [
+                1, 0, 1,
+                1, 1, 1,
+                1, 1, 1,
+                0, 1, 0,
+                0, 0, 0
+            ],
+            '0': [
+                1, 1, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 1
+            ],
+            '1': [
+                0, 1, 0,
+                1, 1, 0,
+                0, 1, 0,
+                0, 1, 0,
+                0, 1, 0
+            ],
+            '2': [
+                1, 1, 1,
+                0, 0, 1,
+                1, 1, 1,
+                1, 0, 0,
+                1, 1, 1
+            ],
+            '3': [
+                1, 1, 1,
+                0, 0, 1,
+                0, 1, 1,
+                0, 0, 1,
+                1, 1, 1
+            ],
+            '4': [
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 1,
+                0, 0, 1,
+                0, 0, 1
+            ],
+            '5': [
+                1, 1, 1,
+                1, 0, 0,
+                1, 1, 1,
+                0, 0, 1,
+                1, 1, 0
+            ],
+            '6': [
+                0, 1, 1,
+                1, 0, 0,
+                1, 1, 1,
+                1, 0, 1,
+                1, 1, 1
+            ],
+            '7': [
+                1, 1, 1,
+                0, 0, 1,
+                0, 1, 0,
+                0, 1, 0,
+                0, 1, 0
+            ],
+            '8': [
+                1, 1, 1,
+                1, 0, 1,
+                1, 1, 1,
+                1, 0, 1,
+                1, 1, 1
+            ],
+            '9': [
+                1, 1, 1,
+                1, 0, 1,
+                1, 1, 1,
+                0, 0, 1,
+                1, 1, 0
+            ],
+            'A': [
+                0, 1, 0,
+                1, 0, 1,
+                1, 1, 1,
+                1, 0, 1,
+                1, 0, 1
+            ],
+            'B': [
+                1, 1, 0,
+                1, 0, 1,
+                1, 1, 0,
+                1, 0, 1,
+                1, 1, 0
+            ],
+            'C': [
+                1, 1, 1,
+                1, 0, 0,
+                1, 0, 0,
+                1, 0, 0,
+                1, 1, 1
+            ],
+            'D': [
+                1, 1, 0,
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 0
+            ],
+            'E': [
+                1, 1, 1,
+                1, 0, 0,
+                1, 1, 0,
+                1, 0, 0,
+                1, 1, 1
+            ],
+            'F': [
+                1, 1, 1,
+                1, 0, 0,
+                1, 1, 0,
+                1, 0, 0,
+                1, 0, 0
+            ],
+            'G': [
+                1, 1, 1,
+                1, 0, 0,
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 1
+            ],
+            'H': [
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 1,
+                1, 0, 1,
+                1, 0, 1
+            ],
+            'I': [
+                0, 1, 0,
+                0, 1, 0,
+                0, 1, 0,
+                0, 1, 0,
+                0, 1, 0
+            ],
+            'J': [
+                1, 1, 1,
+                0, 1, 0,
+                0, 1, 0,
+                0, 1, 0,
+                1, 0, 0
+            ],
+            'K': [
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 0,
+                1, 0, 1,
+                1, 0, 1
+            ],
+            'L': [
+                1, 0, 0,
+                1, 0, 0,
+                1, 0, 0,
+                1, 0, 0,
+                1, 1, 1
+            ],
+            'N': [
+                0, 0, 1,
+                1, 0, 1,
+                1, 1, 1,
+                1, 0, 1,
+                1, 0, 0
+            ],
+            'M': [
+                1, 0, 1,
+                1, 1, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1
+            ],
+            'O': [
+                1, 1, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 1
+            ],
+            'P': [
+                1, 1, 1,
+                1, 0, 1,
+                1, 1, 1,
+                1, 0, 0,
+                1, 0, 0
+            ],
+            'Q': [
+                1, 1, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 0,
+                0, 0, 1
+            ],
+            'R': [
+                1, 1, 0,
+                1, 0, 1,
+                1, 1, 0,
+                1, 0, 1,
+                1, 0, 1
+            ],
+            'S': [
+                1, 1, 1,
+                1, 0, 0,
+                1, 1, 0,
+                0, 0, 1,
+                1, 1, 1
+            ],
+            'T': [
+                1, 1, 1,
+                0, 1, 0,
+                0, 1, 0,
+                0, 1, 0,
+                0, 1, 0
+            ],
+            'U': [
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 1
+            ],
+            'W': [
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 1, 1,
+                1, 0, 1
+            ],
+            'V': [
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                0, 1, 0
+            ],
+            'X': [
+                1, 0, 1,
+                1, 0, 1,
+                0, 1, 0,
+                1, 0, 1,
+                1, 0, 1
+            ],
+            'Y': [
+                1, 0, 1,
+                1, 0, 1,
+                1, 0, 1,
+                0, 1, 0,
+                0, 1, 0
+            ],
+            'Z': [
+                1, 1, 1,
+                0, 0, 1,
+                0, 1, 0,
+                1, 0, 0,
+                1, 1, 1
+            ]
+        },
+    };
+    class qr_font_bitmap {
+        constructor() {
+            this.char_offset = {};
+            let f = qr_pixel_font_data;
+            let w = this.char_width = f.char.width + 2;
+            let h = this.char_height = f.char.height + 2;
+            let n = Object.keys(f.letters).length;
+            let render_letter = (ctx, letter) => {
+                let w = f.char.width, h = f.char.height;
+                for (let x = 0; x < w; ++x) {
+                    for (let y = 0; y < h; ++y) {
+                        let dot = f.letters[letter][y * w + x];
+                        if (dot)
+                            ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            };
+            this.bitmap = qr_create_canvas(w * n + 1, h, ctx => {
+                let offset_x = 0;
+                for (let l in f.letters) {
+                    for (let x of [0, 2, 1]) {
+                        for (let y of [0, 2, 1]) {
+                            ctx.fillStyle = x == 1 && y == 1 ? '#fff' : '#000';
+                            ctx.save();
+                            ctx.translate(x, y);
+                            render_letter(ctx, l);
+                            ctx.restore();
+                        }
+                    }
+                    this.char_offset[l] = offset_x;
+                    offset_x += w;
+                    ctx.translate(w, 0);
+                }
+            });
+        }
+    }
+    function qr_render_string(f, ctx, text, pos = v2()) {
+        let x = 0, y = 0;
+        // ctx.drawImage(f.bitmap, pos.x, pos.y);
+        for (let l of text.toUpperCase()) {
+            if (l === '\n') {
+                y += f.char_height;
+                x = 0;
+                continue;
+            }
+            ctx.drawImage(f.bitmap, f.char_offset[l], 0, f.char_width, f.char_height, x + pos.x, y + pos.y, f.char_width, f.char_height);
+            x += f.char_width - 1;
+        }
+    }
+    const qr_pixel_font = new qr_font_bitmap();
     function qr_create_canvas(width, height, cb) {
         let c = document.createElement('canvas');
         c.width = width;
@@ -602,7 +965,18 @@ var __;
         let keyboard;
         (function (keyboard) {
             const state = {};
-            function is_down(key) { return state[key] ? state[key].is_down : false; }
+            const key_down_bindings = {};
+            function bind_keydown(key, fn, owner) {
+                let b = key_down_bindings[key];
+                if (!b) {
+                    b = key_down_bindings[key] = new qf_multicast_delegate();
+                }
+                b.bind(fn, owner);
+            }
+            keyboard.bind_keydown = bind_keydown;
+            function is_down(key) {
+                return state[key] ? state[key].is_down : false;
+            }
             keyboard.is_down = is_down;
             function get_state(key) {
                 let s = state[key];
@@ -620,11 +994,19 @@ var __;
             }
             keyboard.just_pressed = just_pressed;
             function on_keydown(e) {
+                // #DEBUG-BEGIN
+                if (e instanceof KeyboardEvent) {
+                    g_poll_gamepad = false;
+                }
+                // #DEBUG-END
                 let s = get_state(e.key);
                 if (s.is_down)
                     return;
                 s.is_down = true;
                 s.timestamp = Date.now();
+                if (key_down_bindings[e.key]) {
+                    key_down_bindings[e.key].broadcast();
+                }
                 e.preventDefault();
             }
             keyboard.on_keydown = on_keydown;
@@ -632,6 +1014,51 @@ var __;
                 get_state(e.key).is_down = false;
             }
             keyboard.on_keyup = on_keyup;
+            class q_fake_keyboard_event {
+                constructor(key) {
+                    this.key = key;
+                }
+                preventDefault() { }
+            }
+            // #DEBUG-BEGIN
+            let g_poll_gamepad = false;
+            function poll_gamepad() {
+                let gp = navigator.getGamepads()[0];
+                if (!g_poll_gamepad && gp) {
+                    g_poll_gamepad = gp.buttons[0].pressed;
+                }
+                if (g_poll_gamepad && gp) {
+                    if (gp.buttons[0].pressed) {
+                        on_keydown(new q_fake_keyboard_event(' '));
+                    }
+                    else if (get_state(' ').is_down) {
+                        on_keyup(new q_fake_keyboard_event(' '));
+                    }
+                    if (gp.buttons[2].pressed) {
+                        on_keydown(new q_fake_keyboard_event('z'));
+                    }
+                    else if (gp.buttons[7].pressed) {
+                        on_keydown(new q_fake_keyboard_event('z'));
+                    }
+                    else if (get_state('z').is_down) {
+                        on_keyup(new q_fake_keyboard_event('z'));
+                    }
+                    if (gp.axes[0] > 0.5) {
+                        on_keydown(new q_fake_keyboard_event('ArrowRight'));
+                    }
+                    else if (get_state('ArrowRight').is_down) {
+                        on_keyup(new q_fake_keyboard_event('ArrowRight'));
+                    }
+                    if (gp.axes[0] < -0.5) {
+                        on_keydown(new q_fake_keyboard_event('ArrowLeft'));
+                    }
+                    else if (get_state('ArrowLeft').is_down) {
+                        on_keyup(new q_fake_keyboard_event('ArrowLeft'));
+                    }
+                }
+            }
+            keyboard.poll_gamepad = poll_gamepad;
+            // #DEBUG-END
         })(keyboard = qs_input.keyboard || (qs_input.keyboard = {}));
         let mouse;
         (function (mouse) {
@@ -777,7 +1204,6 @@ var __;
                 // x = f(y)
                 let f = y => Math.floor(((y * ts - b) / a) / ts);
                 let increasing = a > 0;
-                let i = 0;
                 let x = f(y + (increasing ? 0 : 1));
                 let x_end = f(y + (increasing ? 1 : 0));
                 // we have to iterate from right to left if line is decreasing on x axis
@@ -790,14 +1216,9 @@ var __;
                 for (;;) {
                     if (fn(x, y))
                         return;
-                    if (++i > 100)
-                        break;
                     if (x == x_end)
                         break;
-                    if (d.x > 0)
-                        ++x;
-                    else
-                        --x;
+                    x += d.x > 0 ? 1 : -1;
                 }
                 if (y != e.y)
                     y += Math.sign(d.y);
@@ -919,7 +1340,7 @@ var __;
                 idx = visited.indexOf(tile_id);
             }
             // #DEBUG-BEGIN
-            if (__.g_draw_paths) {
+            if (g_1.g_draw_paths) {
                 qi_g_paths.push(path);
             }
             // #DEBUG-END
@@ -957,7 +1378,7 @@ var __;
         trace_ground() {
             let r = this.owner.root;
             let g = this.owner.world.geometry;
-            return g.sweep_aabb(r.pos, qm_add(r.pos, qm_down), r.bounds);
+            return g.sweep_aabb(r.pos, qm_add(r.pos, v2(0, 5)), r.bounds);
         }
         tick(delta) {
             if (this.do_proces_input) {
@@ -968,9 +1389,6 @@ var __;
             this.vel.y += this.gravity * delta;
             this.vel = qm_add(this.vel, qm_scale(this.acc, delta));
             this.vel = qm_clamp_mag(this.vel, 0, this.max_velocity);
-            // if (this.on_ground) {
-            this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
-            // }
             let end = qm_add(r.pos, qm_scale(this.vel, delta));
             let trace = g.sweep_aabb(r.pos, end, r.bounds);
             if (trace) {
@@ -995,15 +1413,10 @@ var __;
                         }
                     }
                     this.vel.x *= this.bounce_off_wall ? -qm_rnd(0.2, 0.5) : 0;
-                    // this.vel = qm_scale(this.vel, this.bounce_off_wall ? - qm_rnd(0.5, 0.7) : 0);
                 }
             }
-            // else {
-            // r.pos.x = Math.round(end.x);
             r.pos.x = end.x;
             r.pos.y = end.y;
-            // r.pos = end;
-            // }
             this.on_ground = !!this.trace_ground();
         }
     }
@@ -1016,7 +1429,7 @@ var __;
             this.negative = false;
         }
         blink() {
-            this.visible = false;
+            // this.visible = false;
             this.negative = true;
             this.get_timer().delay(0.05, _ => this.visible = true, this);
             this.get_timer().delay(0.10, _ => this.negative = false, this);
@@ -1057,6 +1470,40 @@ var __;
             }
         }
     }
+    class qc_label_component extends qf_scene_component {
+        constructor() {
+            super(...arguments);
+            this.text = '';
+            this.font = qr_pixel_font;
+        }
+        set_text(s) {
+            let l = s.split('\n');
+            this.bounds.x = l.map(l => l.length).sort().pop() * (this.font.char_width - 1) + 1;
+            this.bounds.y = l.length * (this.font.char_height + 1);
+            this.text = s;
+        }
+        render_c2d_impl(ctx) {
+            qr_render_string(this.font, ctx, this.text, qm_scale(this.bounds, -0.5));
+        }
+    }
+    function apply_radial_damage(src, force = 300, radious = 50, damage = 1, cc = 8 /* enemy */) {
+        let w = src.world;
+        let p = src.get_pos();
+        for (let a of w.actors) {
+            if (a.root && (a.root.collision_mask & cc)) {
+                let dir = qm_sub(a.root.get_pos(), p);
+                if (qm_mag(dir) <= radious) {
+                    let m = a.getcmp(qi_ai_movement)[0];
+                    if (m) {
+                        m.vel = qm_clamp_mag(dir, force, 0);
+                    }
+                    if (damage > 0) {
+                        a.on_take_damage.broadcast(new qf_damage_event(damage, src, qm_unit(qm_scale(dir, -1))));
+                    }
+                }
+            }
+        }
+    }
     class qc_explosion_component extends qf_scene_component {
         constructor() {
             super(...arguments);
@@ -1064,6 +1511,9 @@ var __;
             this.duration = 0.11;
             this.elpased = 0;
             this.radious = 10;
+        }
+        begin_play() {
+            apply_radial_damage(this.owner, 200, this.radious, 1);
         }
         tick(delta) {
             if (this.elpased > this.duration) {
@@ -1075,53 +1525,41 @@ var __;
             this.elpased += delta;
         }
         render_c2d_impl(ctx) {
+            let alpha = this.elpased / this.duration;
+            let gco = ctx.globalCompositeOperation;
+            if (alpha > 0.5) {
+                ctx.globalCompositeOperation = 'difference';
+            }
             ctx.beginPath();
             ctx.arc(0, 0, this.radious, 0, 2 * Math.PI);
-            ctx.fillStyle = this.elpased / this.duration < 0.5 ? '#000' : '#fff';
+            ctx.fillStyle = alpha < 0.5 ? '#000' : '#fff';
             ctx.fill();
+            ctx.globalCompositeOperation = gco;
         }
     }
     class qc_wave_component extends qf_scene_component {
         constructor() {
             super(...arguments);
             this.wants_tick = true;
-            this.start_radious = 0;
-            this.end_radious = 1000;
-            this.expand_durtation = 0.5;
-            this.slomo_duration = 0.1;
+            this.start_radious = 10;
+            this.end_radious = 400;
+            this.expand_durtation = 0.25;
+            this.slomo_duration = 0.15;
             this.elapsed = 0;
         }
         begin_play() {
-            // g_time_dilation = 0.1;
-            // this.get_timer().delay(this.slomo_duration, _ => g_time_dilation = 1, this);
-            let w = this.get_world();
-            let t = this.get_timer();
-            for (let a of w.actors) {
-                let m = a.getcmp(qi_ai_movement)[0];
-                if (a.root && m) {
-                    let dir = qm_sub(a.get_pos(), this.pos);
-                    let mag = qm_mag(dir);
-                    dir = qm_scale(dir, 1000 / mag);
-                    m.vel = dir;
-                    m.do_proces_input = false;
-                    let b = m.bounce_off_wall;
-                    let ms = m.max_velocity;
-                    m.bounce_off_wall = true;
-                    m.max_velocity = 9000;
-                    t.delay(0.1, _ => {
-                        m.do_proces_input = true;
-                        m.bounce_off_wall = b;
-                        m.max_velocity = ms;
-                    }, a);
-                }
-            }
+            apply_radial_damage(this.owner, 600, 99999, 0);
         }
         tick(delta) {
-            const hs = this.slomo_duration / 1.1;
-            __.g_time_dilation = qm_clamp(1 - this.elapsed / hs, 0.01, 1);
             this.elapsed += delta;
+            if (this.elapsed < this.slomo_duration) {
+                const hs = this.slomo_duration / 1.05;
+                g_1.g_time_dilation = qm_clamp(1 - this.elapsed / hs, 0.01, 1);
+            }
             if (this.elapsed > this.slomo_duration) {
-                __.g_time_dilation = 1;
+                g_1.g_time_dilation = 1;
+            }
+            if (this.elapsed > this.expand_durtation) {
                 this.owner.destroy();
             }
         }
@@ -1138,318 +1576,64 @@ var __;
         }
     }
     class qc_pickable_component extends qf_component_base {
-        begin_play() {
-            this.get_timer().every(0.1, this.update, this);
+        constructor() {
+            super(...arguments);
+            this.on_overlap_begins = new qf_multicast_delegate();
+            this.on_overlap_ends = new qf_multicast_delegate();
+            this.lifespan = 0;
+            this.elapsed = 0;
+            this.blink = false;
+            this.wants_tick = true;
+            this.last_frame_overlap = false;
         }
-        update() {
+        begin_play() {
+            // this.get_timer().every(0.05, this.update, this);
+            if (this.lifespan > 0) {
+                this.get_timer().delay(this.lifespan, this.owner.destroy, this.owner);
+                if (this.blink) {
+                    this.get_timer().every(0.1, this.blink_impl, this);
+                }
+            }
+        }
+        tick(delta) {
             let r = this.owner.root;
             let w = this.get_world();
-            let o = w.overlap(r.get_aabb(), 16 /* player */);
-            if (o[0] && this.activate_delegate) {
-                this.activate_delegate();
+            this.elapsed += delta;
+            let o = w.overlap(this.bounds ? this.bounds : r.get_aabb(), 16 /* player */);
+            if (o[0] && !this.last_frame_overlap) {
+                this.on_overlap_begins.broadcast();
+                this.last_frame_overlap = true;
+            }
+            else if (!o[0] && this.last_frame_overlap) {
+                this.on_overlap_ends.broadcast();
+                this.last_frame_overlap = false;
+            }
+        }
+        blink_impl() {
+            let r = this.owner.root;
+            if (this.lifespan > 0 && (this.lifespan - this.elapsed) < 1) {
+                r.visible = !r.visible;
             }
         }
     }
-    // ai
-    var qi_g_paths = [];
-    const qi_g_on_enemy_killed = new qf_multicast_delegate();
-    function qi_flying_path_filter(geom, s, e) {
-        return !geom.is_blocking(e.x, e.y);
-    }
-    function qi_default_walk_filter(geom, s, e) {
-        if (geom.is_blocking(s.x, s.y))
-            return false;
-        let e_dist = geom.get_blocking_dist(e);
-        // end is blocking tile
-        if (e_dist == 0)
-            return false;
-        let dir = qm_sub(e, s);
-        let e_floor = geom.get_floor_dist(e);
-        // we can move horizontaly only on tiles that are floors
-        if (dir.y == 0 && e_floor > 1)
-            return false;
-        let s_jump = geom.get_jump_dist(s);
-        // if we want to go up
-        if (dir.y < 0) {
-            // we can go straight up only near walls
-            if (dir.x == 0 && e_dist > 1)
-                return false;
-            // we can keep goin up while we are near floor or walls
-            if (dir.x != 0 && s_jump > 2)
-                return false;
-        }
-        return true;
-    }
-    class qi_ai_movement extends qc_character_movement {
-        constructor() {
-            super(...arguments);
-            // setup
-            this.ground_acc = 500;
-            this.air_acc = 500;
-            this.jump_vel = 300;
-            this.flying = false;
-            // runtime
-            this.input = v2();
-        }
-        process_input() {
-            if (this.flying) {
-                this.acc = qm_scale(this.input, this.air_acc);
-                return;
-            }
-            if (this.input.x != 0) {
-                if (this.on_ground) {
-                    this.acc.x = this.input.x * this.ground_acc;
-                }
-                else {
-                    this.acc.x = this.input.x * this.air_acc;
-                }
-            }
-            else if (this.on_ground) {
-                this.vel.x *= 0.8;
-            }
-            if (this.input.y < 0) {
-                let wall_hit = this.trace_wall(3);
-                if (this.on_ground && !wall_hit) {
-                    this.vel.y = -this.jump_vel;
-                }
-                else if (wall_hit) {
-                    let [p, n] = wall_hit;
-                    if (n.x > 0) {
-                        this.vel.y = -this.jump_vel;
-                        this.vel.x = 80;
-                    }
-                    else if (n.x < 0) {
-                        this.vel.y = -this.jump_vel;
-                        this.vel.x = -80;
-                    }
-                }
-            }
-            else {
-                this.acc.y = 0;
-            }
-        }
-    }
-    class qi_enemy_controller extends qf_component_base {
-        constructor() {
-            super(...arguments);
-            this.hitpoints = 1;
-            this.max_hitpoints = 1;
-            this.base_damage = 1;
-            this.atk_speed = 0.5;
-            this.atk_lock = false;
-        }
-        begin_play() {
-            super.begin_play();
-            [this.mov] = this.owner.getcmp(qi_ai_movement);
-            [this.spr] = this.owner.getcmp(qc_anim_sprite_component);
-            this.target = this.owner.world.player;
-            this.root = this.owner.root;
-            this.owner.on_take_damage.bind(this.take_damage, this);
-            this.get_timer().every(0.1, this.update, this);
-            this.get_timer().delay(0, _ => this.hitpoints += g_stage, this);
-        }
-        update() {
-            if (this.mov && this.spr) {
-                this.spr.flip_x = this.mov.vel.x > 0;
-            }
-            if (this.overlaps_target() && !this.atk_lock) {
-                let dir = qm_sub(this.target.get_pos(), this.owner.get_pos());
-                this.target.on_take_damage.broadcast(new qf_damage_event(this.base_damage, this.owner, dir));
-                this.get_timer().delay(this.atk_speed, _ => this.atk_lock = false, this);
-                this.atk_lock = true;
-            }
-        }
-        take_damage(e) {
-            this.last_hit = e;
-            this.hitpoints -= e.damage;
-            if (this.root instanceof qc_sprite_component) {
-                this.root.blink();
-            }
-            if (this.hitpoints <= 0) {
-                this.handle_death();
-            }
-        }
-        handle_death() {
-            let w = this.get_world();
-            let c = w.actors.filter(a => a.getcmp(qi_enemy_controller)[0]);
-            for (let i = qm_rnd(1, 3); i >= 0; --i) {
-                // let coin = spawn_coin(w, qm_add(this.owner.get_pos(), v2(0, -5))).getcmp(qc_projectile_movement)[0];
-                let coin = spawn_coin(w, this.owner.get_pos()).getcmp(qc_projectile_movement)[0];
-                coin.vel.x = this.last_hit.dir.x * -qm_rnd(100, 200);
-                coin.vel.y = qm_rnd(200, 400);
-            }
-            if (c.length === 1) {
-                g_stage += 1;
-                for (let i = 0; i < g_stage; ++i) {
-                    this.get_timer().delay(qm_rnd(), _ => {
-                        qm_rnd_select(qi_spawn_humanoid, qi_spawn_slime, spawn_bat)(w, { x: qm_rnd(30, 340), y: 30 });
-                    }, this.target);
-                }
-            }
-            qi_g_on_enemy_killed.broadcast(this.owner);
-            this.owner.destroy();
-        }
-        overlaps_target() {
-            return qm_overlap_aabb(this.root.get_aabb(), this.target.root.get_aabb());
-        }
-    }
-    class qi_slime_controller extends qi_enemy_controller {
-        begin_play() {
-            super.begin_play();
-            this.mov.bounce_off_wall = true;
-            this.get_world().timer.delay(qm_rnd(), _ => {
-                this.get_world().timer.every(qm_rnd(2.6, 3), this.do_jump.bind(this), this.owner);
-            }, this.owner);
-        }
-        do_jump() {
-            let dir = qm_sign(qm_sub(this.target.get_pos(), this.root.pos));
-            let w = this.get_world();
-            let start = this.root.pos;
-            let g = this.owner.world.geometry;
-            let path = g.find_path(this.root.pos, this.target.root.pos, qi_default_walk_filter);
-            if (path) {
-                for (let i = 1; i < path.length; ++i) {
-                    dir = qm_sign(qm_sub(path[i], path[i - 1]));
-                    if (dir.x != 0)
-                        break;
-                }
-            }
-            let jump = qm_scale(v2(300 * dir.x, -300), qm_rnd(0.5, 1));
-            let hit = w.sweep_aabb(start, qm_add(start, v2(20 * dir.x, -20)), this.root.bounds, 2 /* geom */);
-            this.mov.vel = hit ? qm_mul(jump, v2(0.2, 1.5)) : jump;
-        }
-    }
-    class qi_humanoid_controller extends qi_enemy_controller {
-        constructor() {
-            super(...arguments);
-            this.path_filter = qi_default_walk_filter;
-            this.dimishing_return = 1;
-        }
-        begin_play() {
-            super.begin_play();
-            this.think_event = this.get_timer().every(0.033, this.think, this);
-            // this.get_timer().every(1, this.try_fire, this);
-        }
-        think(delta) {
-            this.dimishing_return = qm_clamp(this.dimishing_return + 0.01, 0, 1);
-            let g = this.owner.world.geometry;
-            let path = g.find_path(this.root.pos, this.target.root.pos, this.path_filter);
-            if (path) {
-                this.mov.input = qm_scale(qm_sign(qm_sub(path[1], path[0])), qm_rnd(0.5, 1));
-            }
-            else {
-                this.mov.input.x = 0;
-                this.mov.input.y = 0;
-            }
-        }
-        try_fire() {
-            if (!this.mov.on_ground)
-                return;
-            let w = this.get_world();
-            let this_pos = this.owner.get_pos();
-            let trg_pos = this.target.get_pos();
-            let hit = w.sweep_aabb(this_pos, trg_pos, v2(5, 5), 2 /* geom */ | 16 /* player */);
-            if (hit && hit.actor) {
-                this.think_event.fire_in = 1;
-                this.mov.input = v2();
-                this.mov.vel.x = 0;
-                let dir = qm_sub(trg_pos, this_pos);
-                spawn_projectile(w, this_pos, dir, this.owner, { lifespan: 3, gravity: 0, cc: 16 /* player */ | 2 /* geom */ });
-            }
-        }
-        take_damage(e) {
-            this.think_event.fire_in = 0.5 * this.dimishing_return;
-            this.mov.input = v2();
-            this.mov.vel.x -= 1000 * e.dir.x * this.dimishing_return;
-            this.mov.vel.y -= 300 * this.dimishing_return * (this.mov.flying ? 0.1 : 1);
-            this.dimishing_return = qm_clamp(this.dimishing_return - 0.1, 0, 1);
-            super.take_damage(e);
-        }
-    }
-    function qi_spawn_slime(world, { x, y }) {
-        let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, coll_mask: 8 /* pawn */, root: true });
-        r.bounds = v2(9, 6);
-        r.sequences['idle'] = new qr_sprite_sequence(g_character_spritesheet, [4, 5], [.12, .12]);
-        r.sequences['idle'].loop = true;
-        r.play('idle');
-        r.offset.y -= 3;
-        qf_attach_cmp(a, new qi_ai_movement());
-        qf_attach_cmp(a, new qi_slime_controller());
-        return a;
-    }
-    function qi_spawn_humanoid(world, { x, y }) {
-        let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, coll_mask: 8 /* pawn */, root: true });
-        r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [2, 3]);
-        r.sequences['walk'].loop = true;
-        r.sequences['walk'].set_duration(0.15);
-        r.offset.y = -5;
-        r.play('walk');
-        let mov = qf_attach_cmp(a, new qi_ai_movement());
-        mov.ground_acc *= 0.2;
-        // mov.max_velocity = 150;
-        // mov.max_velocity_on_ground =  50;
-        let h = qf_attach_cmp(a, new qi_humanoid_controller());
-        h.hitpoints = 4;
-        h.max_hitpoints = 3;
-        return a;
-    }
-    /**
-     * GLOBALS
-     */
-    const g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
-    const g_negative_spritesheet_image = qr_create_canvas(128, 128);
-    const g_character_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 18), v2(9, 9));
-    const g_tile_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 14), v2(9, 10));
-    var g_stage = 1;
-    var g_scene_offset = v2();
-    /**
-     *  SPAWN METHODS
-     */
-    function spawn_bat(world, { x, y }) {
-        let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, coll_mask: 8 /* pawn */, height: 12, root: true });
-        r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [6, 7]);
-        r.sequences['walk'].loop = true;
-        r.sequences['walk'].set_duration(0.25);
-        // r.offset.y = 0;
-        r.play('walk');
-        let mov = qf_attach_cmp(a, new qi_ai_movement());
-        mov.gravity = 0;
-        mov.flying = true;
-        // mov.bounce_off_wall = true;
-        mov.air_acc = 100;
-        let h = qf_attach_cmp(a, new qi_humanoid_controller());
-        h.hitpoints = 4;
-        h.path_filter = qi_flying_path_filter;
-        return a;
-    }
-    function spawn_coin(world, { x, y }) {
-        let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_sprite_component(), { x, y, width: 8, height: 7, root: true });
-        r.sprite = g_character_spritesheet.get_sprite(33);
-        let m = qf_attach_cmp(a, new qc_projectile_movement());
-        m.bounce_off_walls = true;
-        m.bounce_factor = 0.8;
-        m.rotate_root = false;
-        m.collision_channel = 2 /* geom */;
-        let p = qf_attach_cmp(a, new qc_pickable_component());
-        p.activate_delegate = _ => a.destroy();
-        return a;
-    }
-    function spawn_freeze_wave(world, { x, y }) {
-        let a = world.spawn_actor();
-        let r = qf_attach_prim(a, new qc_wave_component(), { x, y, root: true });
-        return a;
-    }
-    function spawn_explosion(world, { x, y, radious = 15 }) {
-        let a = world.spawn_actor();
-        let e = qf_attach_prim(a, new qc_explosion_component(), { x, y });
-        e.radious = (qm_rnd_normal() + 1) * radious;
-        return a;
-    }
-    class player_movement extends qc_character_movement {
+    // class qc_tween_manager extends qf_component_base {
+    //     public tweens: qf_tween[] = [];
+    //     public wants_tick = true;
+    //     public tick(delta: number): void {
+    //         for (let i = this.tweens.length - 1; i >= 0; --i) {
+    //             this.tweens[i].tick(delta);
+    //             if (this.tweens[i].is_done()) {
+    //                 this.tweens.splice(i, 1);
+    //             }
+    //         }
+    //     }
+    //     public make<T, K extends keyof T>(obj: T, prop: K, start_value: number, end_value: number, duration: number, easing = qf_easing_sin_inout): qf_tween {
+    //         let t = new qf_tween(obj, prop, start_value, end_value, duration, easing);
+    //         this.tweens.push(t);
+    //         return t;
+    //     }
+    // }
+    class qc_player_movement extends qc_character_movement {
         process_input() {
             const speed = 900;
             this.acc.x = 0;
@@ -1458,15 +1642,11 @@ var __;
             const move_left = k.is_down('ArrowLeft');
             const move_right = k.is_down('ArrowRight');
             const jump = k.just_pressed('ArrowUp') || k.just_pressed(' ');
-            if (move_left) {
-                // this.acc.x = -speed * (this.on_ground ? 1 : 0.5);
-                this.acc.x = -speed;
-                this.moving_left = true;
-            }
-            else if (move_right) {
+            if (move_left || move_right) {
                 // this.acc.x = speed * (this.on_ground ? 1 : 0.5);
-                this.acc.x = speed;
-                this.moving_left = false;
+                this.acc.x = move_left ? -speed : speed;
+                this.moving_left = move_left;
+                this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
             }
             else if (this.on_ground) {
                 this.vel.x *= 0.4;
@@ -1500,7 +1680,7 @@ var __;
             }
         }
         tick(delta) {
-            delta = delta * 1 / __.g_time_dilation;
+            delta = delta * 1 / g_1.g_time_dilation;
             this.process_input();
             super.tick(delta);
         }
@@ -1555,14 +1735,639 @@ var __;
             }
         }
     }
+    class qc_player_controller extends qf_component_base {
+        constructor() {
+            super(...arguments);
+            // bullet setup
+            this.bullet_speed = 300;
+            this.fire_spread = 5;
+            this.bullets_per_shoot = 1;
+            this.explosion_chance = 0.1;
+            this.bullet_damage = 1;
+            // other setup
+            this.gems_per_kill = 3;
+            this.life = 2;
+            this.gem_count = 0;
+            this.should_take_damage = true;
+            this.wants_tick = true;
+            this.fire_rate = 4;
+            this.timer = new qf_timer();
+        }
+        begin_play() {
+            [this.movement] = this.owner.getcmp(qc_player_movement);
+            [this.sprite] = this.owner.getcmp(qc_anim_sprite_component);
+            [this.stats] = this.owner.getcmp(qc_label_component);
+            [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite');
+            this.owner.on_take_damage.bind(this.take_damage, this);
+            this.set_fire_rate(this.fire_rate);
+            // #DEBUG-BEGIN
+            qs_input.keyboard.bind_keydown('1', _ => g_world.actors.forEach(a => a.getcmp(qi_enemy_controller)[0] ? a.on_take_damage.broadcast(new qf_damage_event(9999, this.owner, qm_up)) : 1), this);
+            qs_input.keyboard.bind_keydown('2', _ => reset(), this);
+            qs_input.keyboard.bind_keydown('3', _ => g_game_mode.spawn_wave(), this);
+            qs_input.keyboard.bind_keydown('5', _ => qm_rnd_select(spawn_bat, spawn_goblin)(g_world, v2(30, 30)), this);
+            // #DEBUG-END
+        }
+        tick(delta) {
+            this.timer.tick(delta * 1 / g_1.g_time_dilation);
+            let a = this.owner;
+            this.sprite.flip_x = !this.movement.moving_left;
+            this.weapon_sprite.pos.x = this.movement.moving_left ? -10 : 10;
+            this.weapon_sprite.flip_x = !this.movement.moving_left;
+            this.weapon_sprite.rot *= 0.9;
+            let vel = this.movement.vel;
+            if (this.movement.on_ground) {
+                if (qm_eq_eps(vel.x, 0, 3)) {
+                    this.sprite.play('idle');
+                }
+                else {
+                    this.sprite.play('walk');
+                }
+            }
+            else {
+                this.sprite.play('jump');
+            }
+            if (qs_input.keyboard.is_down('z')) {
+                this.fire_delegate();
+            }
+            this.stats.set_text(`lives: ${this.life}\ngems:  ${this.gem_count}\nwave:  ${g_stage}`);
+            this.stats.pos = qm_add(v2(20, 20), qm_scale(this.stats.bounds, 0.5));
+        }
+        take_damage(e) {
+            if (!this.should_take_damage) {
+                return;
+            }
+            this.movement.vel.x += e.dir.x * 100;
+            this.movement.vel.y -= 100;
+            this.sprite.blink();
+            this.life -= 1;
+            spawn_freeze_wave(this.get_world(), qm_add(this.owner.get_pos(), v2(0, 3)));
+            if (this.life > 0) {
+                // just for shake
+                spawn_explosion(this.get_world(), { x: -100, y: -100, duration: 0.1 });
+                // invicibly frame
+                this.should_take_damage = false;
+                this.get_timer().delay(0.5, _ => this.should_take_damage = true, this);
+            }
+            else {
+                this.get_timer().delay(0.05, _ => {
+                    this.get_world().actors.forEach(a => a.getcmp(qc_wave_component)[0] && a.destroy());
+                    g_1.g_time_dilation = 0.01;
+                }, this.owner);
+                let msg = qf_attach_prim(this.owner, new qc_label_component(), { x: g_canvas.width / 4, y: g_canvas.height / 4 });
+                msg.set_text(`    you died\nwaves survived: ${g_stage}\n\npress z to restart`);
+                qs_input.keyboard.bind_keydown('z', _ => reset(), this.owner);
+                this.owner.components = this.owner.components.filter(c => {
+                    return !((c instanceof qc_player_movement) || (c instanceof qc_player_controller));
+                });
+            }
+        }
+        set_fire_rate(rate) {
+            this.fire_rate = rate;
+            this.fire_delegate = this.timer.throttle(1 / qm_clamp(rate, 0.5, 1000), this.fire, this);
+        }
+        fire() {
+            let a = this.owner;
+            let ml = this.movement.moving_left;
+            let dir = ml ? qm_left : qm_right;
+            let angle = qm_clamp((this.bullets_per_shoot - 1) * 0.087, 0, 0.785) * dir.x;
+            let step = 0;
+            if (this.bullets_per_shoot > 1) {
+                step = (2 * angle) / (this.bullets_per_shoot - 1);
+            }
+            dir = qm_rotate(dir, -angle);
+            for (let i = 0; i < this.bullets_per_shoot; ++i) {
+                spawn_bullet(a.world, this.weapon_sprite.get_pos(), qm_scale(dir, this.bullet_speed * 1 / g_1.g_time_dilation), this.owner, {
+                    lifespan: 0.3, gravity: 0, cc: 8 /* enemy */ | 2 /* geom */,
+                    damage: this.bullet_damage,
+                    explosion_chance: this.explosion_chance
+                });
+                dir = qm_rotate(dir, step);
+            }
+            if (this.movement.on_ground)
+                this.movement.vel.x += dir.x * -0.1;
+            this.weapon_sprite.rot = this.movement.moving_left ? 3.14 / 2 : -3.14 / 2;
+        }
+        apply_upgrade(item) {
+            switch (item) {
+                case 2 /* bullet_damage_upgrade */:
+                    this.bullet_damage += 1;
+                    return;
+                case 4 /* bullet_explosion_upgrade */:
+                    this.explosion_chance = qm_clamp(this.explosion_chance + 0.1, 0, 1);
+                    return;
+                case 3 /* bullet_num_upgrade */:
+                    this.bullets_per_shoot += 1;
+                    return;
+                case 1 /* bullet_range_upgrade */:
+                    this.bullet_speed += 50;
+                    return;
+                case 0 /* fire_rate_upgrade */:
+                    this.set_fire_rate(this.fire_rate + 2);
+                    return;
+                case 5 /* life_upgrade */:
+                    this.life += 1;
+                    return;
+                case 6 /* coin_drop_upgrade */:
+                    this.gems_per_kill += 2;
+                    return;
+            }
+            qu_assert(false);
+        }
+    }
+    class qc_game_mode extends qf_component_base {
+        constructor() {
+            super(...arguments);
+            this.wave_def = [
+                [[spawn_slime, 2], [spawn_bat, 1]],
+                [[spawn_slime, 4], [spawn_bat, 2]],
+                [],
+                [[spawn_slime, 8], [spawn_bat, 4]],
+                [[spawn_slime, 0], [spawn_bat, 8]],
+                [],
+                [[spawn_boss1, 1]],
+                [],
+                [[spawn_goblin, 2], [spawn_bat, 4]],
+                [[spawn_goblin, 4], [spawn_bat, 4]],
+                [],
+                [[spawn_goblin, 2], [spawn_boss1, 1]],
+                [[spawn_goblin, 8], [spawn_bat, 0]],
+                [],
+                [[spawn_boss1, 2]]
+            ];
+            this.spawned_actors = [];
+        }
+        begin_play() {
+            qi_g_on_enemy_killed.bind(this.on_enemy_killed, this);
+            this.get_timer().delay(1, this.spawn_wave, this);
+        }
+        on_enemy_killed(e) {
+            if (this.is_shopping_time()) {
+                g_stage += 1;
+                this.spawned_actors.forEach(a => a.is_valid() && a.destroy());
+                this.get_timer().delay(3, this.spawn_wave, this);
+            }
+            else if (this.spawned_actors.every(a => !a.is_valid() || a === e)) {
+                qu_log(`wave ${g_stage} finished`);
+                g_stage += 1;
+                this.get_timer().delay(3, this.spawn_wave, this);
+            }
+        }
+        spawn_wave() {
+            let w = this.get_world();
+            let wave = this.wave_def[g_stage % this.wave_def.length];
+            let point_num = g_spawn_positions.length;
+            let spawn_num = 0;
+            this.spawned_actors = [];
+            if (this.is_shopping_time()) {
+                let upg = [];
+                for (let i = 0; i < 7 /* max_none */; ++i) {
+                    upg[i] = i;
+                }
+                for (let pos of g_item_positions) {
+                    let idx = qm_rnd(0, upg.length - 1);
+                    this.spawned_actors.push(spawn_shop_item(w, { x: pos.x, y: pos.y, item: upg[idx] }));
+                    upg.splice(idx, 1);
+                }
+                this.spawned_actors.push(spawn_vendor(w, g_npc_positions[0]));
+                this.get_timer().delay(10, this.on_enemy_killed, this);
+            }
+            for (let [_, num] of wave) {
+                for (let i = 0; i < num; ++i) {
+                    let p = g_spawn_positions[spawn_num % point_num];
+                    spawn_spawn_portal(w, p);
+                    spawn_num += 1;
+                }
+            }
+            this.get_timer().delay(1, _ => {
+                spawn_num = 0;
+                for (let [spawn_fn, num] of wave) {
+                    for (let i = 0; i < num; ++i) {
+                        this.spawned_actors.push(spawn_fn(w, g_spawn_positions[spawn_num % point_num]));
+                        spawn_num += 1;
+                    }
+                }
+            }, this);
+        }
+        is_shopping_time() {
+            return this.wave_def[g_stage % this.wave_def.length].length === 0;
+        }
+    }
+    // ai
+    var qi_g_paths = [];
+    const qi_g_on_enemy_killed = new qf_multicast_delegate();
+    function qi_flying_path_filter(geom, s, e) {
+        if (geom.is_blocking(e.x, e.y))
+            return false;
+        // let d = qm_sub(e, s);
+        // // if moving diagonal
+        // if (qm_manhattan_dist(d) == 2) {
+        //     // forbid if near blocking geom
+        //     if (geom.is_blocking(e.x, s.y)) return false;
+        // }
+        return true;
+    }
+    function qi_default_walk_filter(geom, s, e) {
+        if (geom.is_blocking(s.x, s.y))
+            return false;
+        let e_dist = geom.get_blocking_dist(e);
+        // end is blocking tile
+        if (e_dist == 0)
+            return false;
+        let dir = qm_sub(e, s);
+        let e_floor = geom.get_floor_dist(e);
+        // we can move horizontaly only on tiles that are floors
+        if (dir.y == 0 && e_floor > 1)
+            return false;
+        let s_jump = geom.get_jump_dist(s);
+        // if we want to go up
+        if (dir.y < 0) {
+            // we can go straight up only near walls
+            if (dir.x == 0 && e_dist > 1)
+                return false;
+            // we can keep goin up while we are near floor or walls
+            if (dir.x != 0 && s_jump > 2)
+                return false;
+        }
+        return true;
+    }
+    class qi_ai_movement extends qc_character_movement {
+        constructor() {
+            super(...arguments);
+            // setup
+            this.ground_acc = 500;
+            this.air_acc = 500;
+            this.jump_vel = 300;
+            this.flying = false;
+            this.default_max_velocity = 300;
+            // runtime
+            this.input = v2();
+        }
+        tick(delta) {
+            this.do_proces_input = g_1.g_time_dilation == 1;
+            this.max_velocity = g_1.g_time_dilation != 1 ? 9999 : this.default_max_velocity;
+            super.tick(delta);
+        }
+        process_input() {
+            if (this.flying) {
+                this.acc = qm_scale(this.input, this.air_acc);
+                let wall = this.trace_wall(3);
+                if (wall) {
+                    this.vel.x = wall[1].x * 80;
+                }
+                return;
+            }
+            if (this.input.x != 0) {
+                this.acc.x = this.input.x * (this.on_ground ? this.ground_acc : this.air_acc);
+                this.vel.x = qm_clamp(this.vel.x, -this.max_velocity_on_ground, this.max_velocity_on_ground);
+            }
+            else if (this.on_ground) {
+                this.vel.x *= 0.8;
+            }
+            if (this.input.y < 0) {
+                let wall_hit = this.trace_wall(3);
+                if (this.on_ground && !wall_hit) {
+                    this.vel.y = -this.jump_vel;
+                }
+                else if (wall_hit) {
+                    let [p, n] = wall_hit;
+                    if (n.x > 0) {
+                        this.vel.y = -this.jump_vel;
+                        this.vel.x = 80;
+                    }
+                    else if (n.x < 0) {
+                        this.vel.y = -this.jump_vel;
+                        this.vel.x = -80;
+                    }
+                }
+            }
+            else {
+                this.acc.y = 0;
+            }
+        }
+    }
+    class qi_enemy_controller extends qf_component_base {
+        constructor() {
+            super(...arguments);
+            this.hitpoints = 1;
+            this.base_damage = 1;
+            this.gems = 1;
+            this.atk_speed = 0.5;
+            this.atk_lock = false;
+        }
+        begin_play() {
+            super.begin_play();
+            [this.mov] = this.owner.getcmp(qi_ai_movement);
+            [this.spr] = this.owner.getcmp(qc_anim_sprite_component);
+            this.target = this.owner.world.player;
+            this.root = this.owner.root;
+            this.owner.on_take_damage.bind(this.take_damage, this);
+            this.get_timer().every(0.1, this.update, this);
+        }
+        update() {
+            if (this.mov && this.spr) {
+                this.spr.flip_x = this.mov.vel.x > 0;
+            }
+            if (this.overlaps_target() && !this.atk_lock) {
+                let dir = qm_sub(this.target.get_pos(), this.owner.get_pos());
+                this.target.on_take_damage.broadcast(new qf_damage_event(this.base_damage, this.owner, dir));
+                this.get_timer().delay(this.atk_speed, _ => this.atk_lock = false, this);
+                this.atk_lock = true;
+            }
+        }
+        take_damage(e) {
+            this.last_hit = e;
+            this.hitpoints -= e.damage;
+            if (this.root instanceof qc_sprite_component) {
+                this.root.blink();
+            }
+            if (this.hitpoints <= 0) {
+                this.handle_death();
+            }
+        }
+        handle_death() {
+            let w = this.get_world();
+            for (let i = qm_rnd(this.gems, this.gems + g_player_controller.gems_per_kill); i >= 0; --i) {
+                let coin = spawn_coin(w, this.owner.get_pos()).getcmp(qc_projectile_movement)[0];
+                let lh = this.last_hit.dir;
+                coin.vel.x = (lh.x != 0 ? lh.x : 1) * -qm_rnd(100, 200);
+                coin.vel.y = qm_rnd(200, 400);
+            }
+            if (g_1.g_time_dilation < 1) {
+                spawn_freeze_wave(w, this.owner.get_pos());
+            }
+            qi_g_on_enemy_killed.broadcast(this.owner);
+            this.owner.destroy();
+        }
+        overlaps_target() {
+            return qm_overlap_aabb(this.root.get_aabb(), this.target.root.get_aabb());
+        }
+    }
+    class qi_slime_controller extends qi_enemy_controller {
+        begin_play() {
+            super.begin_play();
+            this.mov.bounce_off_wall = true;
+            this.get_world().timer.delay(qm_rnd(), _ => {
+                this.get_world().timer.every(qm_rnd(2.6, 3), this.do_jump.bind(this), this.owner);
+            }, this.owner);
+        }
+        do_jump() {
+            let dir = qm_sign(qm_sub(this.target.get_pos(), this.root.pos));
+            let w = this.get_world();
+            let start = this.root.pos;
+            let g = this.owner.world.geometry;
+            let path = g.find_path(this.root.pos, this.target.root.pos, qi_default_walk_filter);
+            if (path) {
+                for (let i = 1; i < path.length; ++i) {
+                    dir = qm_sign(qm_sub(path[i], path[i - 1]));
+                    if (dir.x != 0)
+                        break;
+                }
+            }
+            let jump = qm_scale(v2(300 * dir.x, -300), qm_rnd(0.5, 1));
+            let hit = w.sweep_aabb(start, qm_add(start, v2(20 * dir.x, -20)), this.root.bounds, 2 /* geom */);
+            this.mov.vel = hit ? qm_mul(jump, v2(0.2, 1.5)) : jump;
+        }
+    }
+    class qi_humanoid_controller extends qi_enemy_controller {
+        constructor() {
+            super(...arguments);
+            this.path_filter = qi_default_walk_filter;
+            this.dimishing_return = 1;
+        }
+        begin_play() {
+            super.begin_play();
+            this.think_event = this.get_timer().every(0.033, this.think, this);
+        }
+        think(delta) {
+            if (this.atk_lock) {
+                return;
+            }
+            this.dimishing_return = qm_clamp(this.dimishing_return + 0.01, 0, 1);
+            let g = this.owner.world.geometry;
+            let path = g.find_path(this.root.pos, this.target.root.pos, this.path_filter);
+            if (path) {
+                this.mov.input = qm_scale(qm_sign(qm_sub(path[1], path[0])), qm_rnd(0.5, 1));
+            }
+            else {
+                this.mov.input.x = 0;
+                this.mov.input.y = 0;
+            }
+        }
+        take_damage(e) {
+            this.think_event.fire_in = 0.5 * this.dimishing_return;
+            this.mov.input = v2();
+            this.mov.vel.x -= 200 * e.dir.x * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
+            this.mov.vel.y -= 160 * this.dimishing_return * (this.mov.flying ? 0 : 1);
+            this.dimishing_return = qm_clamp(this.dimishing_return - 0.1, 0, 1);
+            super.take_damage(e);
+        }
+    }
+    class qc_boss_controller extends qi_humanoid_controller {
+        begin_play() {
+            super.begin_play();
+            this.get_timer().every(5, _ => {
+                for (let i = 0; i < 3; ++i)
+                    this.get_timer().delay(0.1 * i, this.try_fire, this);
+            }, this);
+        }
+        think(delta) {
+            super.think(delta);
+            this.spr.play('walk');
+            this.dimishing_return = 0;
+        }
+        try_fire() {
+            let w = this.get_world();
+            let this_pos = this.owner.get_pos();
+            let trg_pos = this.target.get_pos();
+            this.think_event.fire_in = 0.5;
+            this.spr.play('fire');
+            this.mov.input = v2();
+            this.mov.vel = v2();
+            let dir = qm_clamp_mag(qm_sub(trg_pos, this_pos), 200);
+            spawn_bullet(w, this_pos, dir, this.owner, { lifespan: 3, gravity: 0, cc: 16 /* player */ });
+        }
+    }
+    /**
+     * GLOBALS
+     */
+    const g_spritesheet_image = (_ => { let i = new Image(); i.src = 's.png'; return i; })();
+    const g_negative_spritesheet_image = qr_create_canvas(128, 128);
+    const g_character_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 18), v2(9, 9));
+    const g_tile_spritesheet = new qr_spritesheet(g_spritesheet_image, g_negative_spritesheet_image, v2(14, 14), v2(9, 10));
+    let g_stage = 0;
+    let g_spawn_positions = [];
+    let g_item_positions = [];
+    let g_npc_positions = [];
+    let g_scene_offset = v2();
+    /**
+     *  SPAWN METHODS
+     */
+    function spawn_slime(world, { x, y }) {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, coll_mask: 8 /* enemy */, root: true });
+        r.bounds = v2(9, 6);
+        r.sequences['idle'] = new qr_sprite_sequence(g_character_spritesheet, [4, 5], [.12, .12]);
+        r.sequences['idle'].loop = true;
+        r.play('idle');
+        r.offset.y -= 3;
+        qf_attach_cmp(a, new qi_ai_movement());
+        let c = qf_attach_cmp(a, new qi_slime_controller());
+        c.hitpoints = 2;
+        return a;
+    }
+    function spawn_goblin(world, { x, y }) {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, coll_mask: 8 /* enemy */, root: true });
+        r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [2, 3]);
+        r.sequences['walk'].loop = true;
+        r.sequences['walk'].set_duration(0.15);
+        r.offset.y = -5;
+        r.play('walk');
+        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        mov.ground_acc *= 0.2;
+        // mov.max_velocity = 150;
+        // mov.max_velocity_on_ground =  50;
+        let h = qf_attach_cmp(a, new qi_humanoid_controller());
+        h.hitpoints = 4;
+        return a;
+    }
+    function spawn_bat(world, { x, y }) {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, coll_mask: 8 /* enemy */, height: 12, root: true });
+        let w = r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [6, 7]);
+        w.loop = true;
+        w.set_duration(0.25);
+        r.play('walk');
+        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        mov.gravity = 0;
+        mov.flying = true;
+        mov.bounce_off_wall = true;
+        mov.default_max_velocity = 60;
+        let h = qf_attach_cmp(a, new qi_humanoid_controller());
+        h.hitpoints = 3;
+        h.path_filter = qi_flying_path_filter;
+        return a;
+    }
+    function spawn_boss1(world, { x, y }) {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, coll_mask: 8 /* enemy */, height: 14, width: 13, root: true });
+        let w = r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [37, 38]);
+        w.loop = true;
+        w.set_duration(0.25);
+        r.play('walk');
+        r.offset.y = -1;
+        r.sequences['fire'] = new qr_sprite_sequence(g_character_spritesheet, [36]);
+        // r.scale = v2(2, 2);
+        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        mov.gravity = 0;
+        mov.flying = true;
+        mov.bounce_off_wall = true;
+        mov.default_max_velocity = 50;
+        let h = qf_attach_cmp(a, new qc_boss_controller());
+        h.hitpoints = 20;
+        h.gems = 30;
+        h.path_filter = qi_flying_path_filter;
+        return a;
+    }
+    function spawn_spawn_portal(world, { x, y }) {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, root: true });
+        let w = r.sequences['1'] = new qr_sprite_sequence(g_character_spritesheet, [8, 13]);
+        w.loop = true;
+        w.set_duration(0.02);
+        r.play('1');
+        r.offset.y = -1;
+        world.timer.delay(1, _ => a.destroy(), a);
+        return a;
+    }
+    function spawn_coin(world, { x, y }) {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_sprite_component(), { x, y, width: 8, height: 7, root: true });
+        r.sprite = g_character_spritesheet.get_sprite(33);
+        let m = qf_attach_cmp(a, new qc_projectile_movement());
+        m.bounce_off_walls = true;
+        m.bounce_factor = 0.8;
+        m.rotate_root = false;
+        m.collision_channel = 2 /* geom */;
+        let p = qf_attach_cmp(a, new qc_pickable_component());
+        p.on_overlap_begins.bind(_ => { g_player_controller.gem_count += 1; a.destroy(); }, p);
+        p.lifespan = 4;
+        p.blink = true;
+        return a;
+    }
+    function spawn_freeze_wave(world, { x, y }) {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_wave_component(), { x, y, root: true });
+        return a;
+    }
+    function spawn_explosion(world, { x, y, radious = 15, duration = 0.11 }) {
+        let a = world.spawn_actor();
+        let e = qf_attach_prim(a, new qc_explosion_component(), { x, y, root: true });
+        e.radious = (qm_rnd_normal() + 1) * radious;
+        e.duration = duration;
+        return a;
+    }
+    function spawn_shop_item(world, { x, y, item = 7 /* max_none */ }) {
+        let a = world.spawn_actor();
+        let s = qf_attach_prim(a, new qc_sprite_component(), { x, y, width: 14, height: 16, root: true });
+        s.sprite = g_character_spritesheet.get_sprite(34);
+        let item_type = qm_rnd(0, 7 /* max_none */) | 0;
+        let cost = get_item_cost(item_type) / 10;
+        let l = qf_attach_prim(a, new qc_label_component(), { y: -25 });
+        l.parent = s;
+        l.set_text(get_item_desc(item_type) + '\ncost: ' + cost + '\njump to buy');
+        l.visible = false;
+        let p = qf_attach_cmp(a, new qc_pickable_component());
+        p.on_overlap_begins.bind(_ => l.visible = true, p);
+        p.on_overlap_ends.bind(_ => l.visible = false, p);
+        let p2 = qf_attach_cmp(a, new qc_pickable_component());
+        p2.bounds = [v2(x, y - 40), v2(10, 10)];
+        p2.on_overlap_begins.bind(_ => {
+            if (g_player_controller.gem_count >= cost) {
+                spawn_freeze_wave(world, { x, y });
+                world.player.getcmp(qc_player_controller)[0].apply_upgrade(item_type);
+                a.destroy();
+                g_player_controller.gem_count -= cost;
+            }
+        }, p2);
+        // let t = qf_attach_cmp(a, new qc_tween_manager());
+        // t.make(s.offset, 'y', 0, -10, 1)
+        //  .then(s.offset, 'y', -10, 0, 1)
+        //  .loop();
+        return a;
+    }
+    function spawn_vendor(world, { x, y }) {
+        let a = world.spawn_actor();
+        let r = qf_attach_prim(a, new qc_anim_sprite_component(), { x, y, coll_mask: 8 /* enemy */, height: 12, root: true });
+        r.offset.y = -2;
+        let idle = r.sequences['idle'] = new qr_sprite_sequence(g_character_spritesheet, [14, 15]);
+        idle.loop = true;
+        idle.set_duration(0.5);
+        r.play('idle');
+        let walk = r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [16, 17]);
+        walk.loop = true;
+        walk.set_duration(0.25);
+        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        mov.max_velocity_on_ground *= 1.5;
+        mov.air_acc *= 1.5;
+        let h = qf_attach_cmp(a, new qi_humanoid_controller());
+        h.atk_lock = true;
+        h.hitpoints = 999;
+        let l = qf_attach_prim(a, new qc_label_component(), { y: -20 });
+        l.parent = r;
+        l.set_text(qm_rnd_select('shopping time', 'only best deals', 'sale sale!'));
+        world.timer.delay(2, _ => l.visible = false, a);
+        a.on_take_damage.bind(_ => { h.atk_lock = false; r.play('walk'); }, a);
+        return a;
+    }
     // #DEBUG-BEGIN
-    __.g_draw_considered = false;
-    __.g_draw_blocking_dist = false;
-    __.g_draw_floor_dist = false;
-    __.g_draw_jump_dist = false;
-    __.g_draw_id = false;
-    __.g_draw_bounds = false;
-    __.g_draw_paths = false;
+    g_1.g_draw_considered = false;
+    g_1.g_draw_blocking_dist = false;
+    g_1.g_draw_floor_dist = false;
+    g_1.g_draw_jump_dist = false;
+    g_1.g_draw_id = false;
+    g_1.g_draw_bounds = false;
+    g_1.g_draw_paths = false;
     class debug_draw_collisions extends qf_scene_component {
         begin_play() {
             this.tiles = this.owner.world.geometry;
@@ -1571,47 +2376,44 @@ var __;
             const tl = this.tiles.tile_size;
             ctx.strokeStyle = 'white';
             ctx.fillStyle = 'red';
-            // let to_local = this.get_world_transform();
-            // mat_invert(to_local);
-            // const pos = transform(this.query_start.root.pos, to_local)
-            // const end = transform(input.mouse.pos, to_local);
             for (let x = 0; x < this.tiles.width; ++x) {
                 for (let y = 0; y < this.tiles.height; ++y) {
-                    if (__.g_draw_bounds) {
+                    if (g_1.g_draw_bounds) {
                         if (this.tiles.is_blocking(x, y)) {
                             ctx.strokeRect(x * tl, y * tl, tl, tl);
                             // this.tiles.line_trace_tile(pos, end, x, y);
                         }
                     }
-                    if (__.g_draw_blocking_dist) {
+                    if (g_1.g_draw_blocking_dist) {
                         ctx.fillStyle = 'red';
                         ctx.fillText(this.tiles.blocking_dist[y][x].toFixed(0), x * tl, (y + 1) * tl);
                     }
-                    if (__.g_draw_floor_dist) {
+                    if (g_1.g_draw_floor_dist) {
                         ctx.fillStyle = 'green';
                         ctx.fillText(this.tiles.floor_dist[y][x].toFixed(0), (x + 0.5) * tl, (y + 1) * tl);
                     }
-                    if (__.g_draw_jump_dist) {
+                    if (g_1.g_draw_jump_dist) {
                         ctx.fillStyle = 'pink';
                         ctx.fillText(this.tiles.jump_dist[y][x].toFixed(0), (x) * tl, (y + 0.5) * tl);
                     }
-                    if (__.g_draw_id) {
+                    if (g_1.g_draw_id) {
                         ctx.fillStyle = 'red';
                         ctx.fillText(x.toFixed(0), (x) * tl, (y + 0.5) * tl);
                         ctx.fillText(y.toFixed(0), (x + 0.5) * tl, (y + 1) * tl);
                     }
                 }
             }
-            if (__.g_draw_bounds) {
+            if (g_1.g_draw_bounds) {
                 ctx.strokeStyle = 'pink';
                 for (let act of this.owner.world.actors) {
                     for (let p of act.getcmp(qf_scene_component)) {
                         let h = qm_scale(p.bounds, 0.5);
-                        ctx.strokeRect(p.pos.x - h.x, p.pos.y - h.y, h.x * 2, h.y * 2);
+                        let pos = p.get_pos();
+                        ctx.strokeRect(pos.x - h.x, pos.y - h.y, h.x * 2, h.y * 2);
                     }
                 }
             }
-            ctx.strokeStyle = 'green';
+            ctx.strokeStyle = 'yellow';
             for (let path of qi_g_paths) {
                 if (path.length == 0)
                     continue;
@@ -1632,7 +2434,7 @@ var __;
             //this.tiles.sweep_aabb(pos, end, this.query_start.root.bounds);
             ctx.strokeStyle = 'green';
             ctx.lineWidth = 0.5;
-            if (__.g_draw_considered)
+            if (g_1.g_draw_considered)
                 for (let r of considered)
                     ctx.strokeRect(r.x, r.y, tl, tl);
             // let hits = this.tiles.d_hits;
@@ -1642,13 +2444,13 @@ var __;
         }
     }
     // #DEBUG-END
-    function spawn_projectile(world, loc, dir, instigator, { lifespan = 0, gravity = 1000, cc = 4294967295 /* all */ }) {
+    function spawn_bullet(world, loc, dir, instigator, { lifespan = 0, gravity = 1000, cc = 4294967295 /* all */, damage = 1, explosion_chance = 0 }) {
         let a = world.spawn_actor();
         let r = qf_attach_prim(a, new qc_anim_sprite_component(), { root: true });
         r.pos = loc;
         r.bounds = v2(8, 6);
         r.sequences['fire'] = new qr_sprite_sequence(g_character_spritesheet, [27, 28], [0.02, 1]);
-        r.sequences['explode'] = new qr_sprite_sequence(g_character_spritesheet, [29, 30, qm_rnd_select(31, 32), 8], [0.03, 0.03, 0.05, 1]);
+        r.sequences['explode'] = new qr_sprite_sequence(g_character_spritesheet, [29, 30, qm_rnd_select(31, 32), 62], [0.03, 0.03, 0.05, 1]);
         r.play('fire');
         let p = new qc_projectile_movement();
         p.vel = dir;
@@ -1656,128 +2458,19 @@ var __;
         p.lifespan = lifespan;
         p.on_hit.bind(_ => r.play('explode'), r);
         p.instigator = instigator;
-        p.collision_channel = 4294967295 /* all */;
+        p.collision_channel = cc;
+        p.damage = damage;
         p.on_hit.bind(hit => {
             if (hit.actor) {
                 hit.actor.on_take_damage.broadcast(new qf_damage_event(p.damage, p.instigator, hit.normal));
             }
-            if (qm_rnd() > 0.8)
+            if (qm_rnd() < explosion_chance) {
                 spawn_explosion(p.get_world(), hit.pos);
+            }
         }, a);
         qf_attach_cmp(a, p);
         return a;
     }
-    class player_controller extends qf_component_base {
-        constructor() {
-            super(...arguments);
-            this.bullet_speed = 300;
-            this.fire_spread = 5;
-            this.bullets_per_shoot = 1;
-            this.wants_tick = true;
-            this.fire_rate = 4;
-        }
-        begin_play() {
-            [this.movement] = this.owner.getcmp(player_movement);
-            [this.sprite] = this.owner.getcmp(qc_anim_sprite_component);
-            [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite');
-            this.owner.on_take_damage.bind(this.take_damage, this);
-            this.set_fire_rate(this.fire_rate);
-            let counter = 0;
-            qi_g_on_enemy_killed.bind(a => {
-                counter += 1;
-                this.set_fire_rate(4 + counter / 4);
-                this.bullet_speed = qm_clamp(this.bullet_speed + 10, 10, 1000);
-                if (this.bullets_per_shoot < 10 && counter % 5 == 0) {
-                    this.bullets_per_shoot += 1;
-                }
-            }, this);
-        }
-        tick(delta) {
-            let a = this.owner;
-            this.sprite.flip_x = !this.movement.moving_left;
-            this.weapon_sprite.pos.x = this.movement.moving_left ? -10 : 10;
-            this.weapon_sprite.flip_x = !this.movement.moving_left;
-            this.weapon_sprite.rot *= 0.9;
-            let vel = this.movement.vel;
-            if (this.movement.on_ground) {
-                if (qm_eq_eps(vel.x, 0, 3)) {
-                    this.sprite.play('idle');
-                }
-                else {
-                    this.sprite.play('walk');
-                }
-                // g_time_dilation = 1;
-            }
-            else {
-                this.sprite.play('jump');
-                // g_time_dilation = 0.5;
-            }
-            if (qs_input.keyboard.is_down('z')) {
-                this.fire_delegate();
-            }
-            // this.getworld().timer.throttle(0.1, (i: number) => i, this);
-            // let z_state = input.keyboard.get_state('z');
-            // if (z_state.is_down)
-            // {
-            //     this.z_press_start = input.keyboard.get_state('z').timestamp;
-            // }
-            // if (this.z_press_start > 0)
-            // {
-            //     const press_time = Date.now() - this.z_press_start;
-            //     const can_fire = this.last_fire_time - this.z_press_start != 0;
-            //     if (can_fire && (!z_state.is_down|| press_time > 1000)) {
-            //         this.last_fire_time = this.z_press_start;
-            //         this.z_press_start = 0;
-            //         let ampl = clamp(press_time / 100, 1, 10);
-            //         let dir = clamp_mag(add(
-            //                 scale(this.movement.moving_left ? left : right, 100 * ampl),
-            //                 v(0, 0)), 0, 800);
-            //         spawn_projectile(a.world, a.root.pos, dir, {lifespan: 0.6, gravity: 0});
-            //     }
-            // }
-        }
-        take_damage(e) {
-            this.movement.vel.x += e.dir.x * 100;
-            this.movement.vel.y -= 100;
-            // this.sprite.blink();
-            spawn_freeze_wave(this.get_world(), this.owner.get_pos());
-            // reset();
-        }
-        set_fire_rate(rate) {
-            this.fire_delegate = this.get_timer().throttle(1 / qm_clamp(rate, 0.5, 1000), this.fire, this);
-        }
-        fire() {
-            let a = this.owner;
-            let ml = this.movement.moving_left;
-            let dir = ml ? qm_left : qm_right;
-            let angle = qm_clamp((this.bullets_per_shoot - 1) * 0.087, 0, 0.785) * dir.x;
-            let step = 0;
-            if (this.bullets_per_shoot > 1) {
-                step = (2 * angle) / (this.bullets_per_shoot - 1);
-            }
-            dir = qm_rotate(dir, -angle);
-            for (let i = 0; i < this.bullets_per_shoot; ++i) {
-                spawn_projectile(a.world, this.weapon_sprite.get_pos(), qm_scale(dir, this.bullet_speed), this.owner, { lifespan: 0.3, gravity: 0, cc: 8 /* pawn */ | 2 /* geom */ });
-                dir = qm_rotate(dir, step);
-            }
-            if (this.movement.on_ground)
-                this.movement.vel.x += dir.x * -0.1;
-            this.weapon_sprite.rot = this.movement.moving_left ? 3.14 / 2 : -3.14 / 2;
-        }
-    }
-    // class buff_spawner extends component_base {
-    //     protected enabled = false;
-    //     public begin_play(): void {
-    //         g_on_enemy_killed.bind(this.on_enemy_killed, this);
-    //     }
-    //     public tick(delta: number) {
-    //         if (!this.enabled) return;
-    //         if (overlap_aabb(this.owner.root.get_aabb(), this.get_world().player.root.get_aabb())) {
-    //         }
-    //     }
-    //     protected on_enemy_killed(): void {
-    //     }
-    // }
     function spawn_player(world, { x, y }) {
         let a = world.spawn_actor();
         let s = new qc_anim_sprite_component();
@@ -1795,13 +2488,19 @@ var __;
         pistol.parent = s;
         pistol.flip_x = true;
         pistol.sprite = g_character_spritesheet.get_sprite(18);
-        qf_attach_cmp(a, new player_movement());
-        qf_attach_cmp(a, new player_controller());
+        qf_attach_prim(a, new qc_label_component(), { x: 20, y: 20 });
+        qf_attach_cmp(a, new qc_player_movement());
+        g_player_controller = qf_attach_cmp(a, new qc_player_controller());
         // #DEBUG-BEGIN
         let tdebug = new debug_draw_collisions();
         qf_attach_prim(a, tdebug, {});
         // #DEBUG-END
         world.player = a;
+        return a;
+    }
+    function spawn_game_mode(world, { x, y }) {
+        let a = g_world.spawn_actor();
+        g_game_mode = qf_attach_cmp(a, new qc_game_mode());
         return a;
     }
     function spawn_tile(actor, { x, y }, id) {
@@ -1812,6 +2511,9 @@ var __;
         let geom = world.geometry;
         let x = 0, y = 0;
         let tile_map = world.spawn_actor();
+        g_spawn_positions = [];
+        g_item_positions = [];
+        g_npc_positions = [];
         for (let line of data.split('\n')) {
             x = 0;
             for (let char of line) {
@@ -1823,59 +2525,92 @@ var __;
                 if (char === '@')
                     spawn_player(world, pos);
                 if (char === 's')
-                    qi_spawn_slime(world, pos);
-                if (char === 'h')
-                    qi_spawn_humanoid(world, pos);
+                    g_spawn_positions.push(pos);
+                if (char === 'n')
+                    g_npc_positions.push(pos);
+                if (char == 'i')
+                    g_item_positions.push(pos);
                 x += 1;
             }
             y += 1;
         }
     }
-    let world;
-    let ctx;
-    __.g_time_dilation = 1;
+    function get_item_desc(i) {
+        switch (i) {
+            case 0 /* fire_rate_upgrade */: return 'increased fire rate';
+            case 1 /* bullet_range_upgrade */: return 'increased bullet range';
+            case 2 /* bullet_damage_upgrade */: return 'increased bullet damage';
+            case 3 /* bullet_num_upgrade */: return 'increased bullet num';
+            case 4 /* bullet_explosion_upgrade */: return 'increased explosion chance';
+            // case qg_item_type.bullet_knockback_upgrade: return 'increased bullet knockback';
+            case 5 /* life_upgrade */: return 'life';
+            case 6 /* coin_drop_upgrade */: return 'increased coin drop';
+        }
+    }
+    function get_item_cost(i) {
+        switch (i) {
+            case 0 /* fire_rate_upgrade */: return 20;
+            case 1 /* bullet_range_upgrade */: return 20;
+            case 2 /* bullet_damage_upgrade */: return 100;
+            case 3 /* bullet_num_upgrade */: return 200;
+            case 4 /* bullet_explosion_upgrade */: return 50;
+            // case qg_item_type.bullet_knockback_upgrade:return 80;
+            case 5 /* life_upgrade */: return 50;
+            case 6 /* coin_drop_upgrade */: return 100;
+        }
+    }
+    let g_world;
+    let g_game_mode;
+    let g_player_controller;
+    let g_context;
+    let g_canvas;
+    g_1.g_time_dilation = 1;
     function tick() {
-        world.tick(0.016 * __.g_time_dilation);
-        ctx.save();
-        ctx.clearRect(0, 0, 410, 210);
-        ctx.translate(g_scene_offset.x, g_scene_offset.y);
-        qr_render_w(ctx, world);
-        ctx.restore();
+        g_world.tick(0.016 * g_1.g_time_dilation);
+        g_context.save();
+        g_context.clearRect(0, 0, g_canvas.width, g_canvas.height);
+        g_context.translate(g_scene_offset.x, g_scene_offset.y);
+        qr_render_w(g_context, g_world);
+        g_context.restore();
+        // #DEBUG-BEGIN
+        qs_input.keyboard.poll_gamepad();
+        // #DEBUG-END
         window.requestAnimationFrame(tick);
     }
     function reset() {
-        if (world) {
-            console.log('score: ', g_stage);
+        if (g_world) {
+            qu_log('score: ', g_stage);
         }
-        g_stage = 1;
-        let t = new qf_tile_geometry(28, 14, 14);
-        world = new qf_world();
-        world.geometry = t;
-        parse_level(`0000000000000000000000000000
-1                          0
-1                          0
-1               s          0
-1               11         0
-1                          0
-1                          0
-1        @                 0
-1      000000     000000   0
-1      000                 0
-1      00                  0
-1      0                   0          
-1                          0
-0000000000000000000111111111`, world);
-        world.has_begun_play = true;
-        for (let a of world.actors)
-            for (let c of a.components)
-                c.begin_play();
+        g_stage = 0;
+        g_1.g_time_dilation = 1;
+        let t = new qf_tile_geometry(35, 18, 14);
+        g_world = new qf_world();
+        g_world.geometry = t;
+        parse_level(`00000000000000000000000000000000000
+1                                 0
+1                                 0
+1 s                             s 0
+10000         111111           0000
+1         1                       0
+1                           1     0
+1   0                             0
+1   0                             0
+1   0                             0
+1   0                             0
+1   0 si                   is     0
+1   1010101            01010110   0
+1               is  n             0
+1            10101010             0
+1                                 0
+1  s            @              s  0
+00000000000000000001111111111111111`, g_world);
+        spawn_game_mode(g_world, v2(0, 0));
     }
     function main() {
-        let canvas = document.querySelector("#canvas");
-        ctx = canvas.getContext("2d");
-        ctx['imageSmoothingEnabled'] = false;
-        ctx.scale(2, 2);
-        ctx.translate(5.5, 5.5);
+        g_canvas = document.querySelector("#canvas");
+        g_context = g_canvas.getContext("2d");
+        g_context['imageSmoothingEnabled'] = false;
+        g_context.scale(2, 2);
         {
             let c = g_negative_spritesheet_image.getContext('2d');
             let { width, height } = g_negative_spritesheet_image;
@@ -1887,7 +2622,7 @@ var __;
             // c.drawImage(g_spritesheet_image, 0, 0);
         }
         reset();
-        qs_input.init(canvas);
+        qs_input.init(g_canvas);
         window.requestAnimationFrame(tick);
     }
     function load() {
@@ -1899,4 +2634,4 @@ var __;
         }
     }
     load();
-})(__ || (__ = {}));
+})(g || (g = {}));
