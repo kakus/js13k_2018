@@ -2376,6 +2376,7 @@ namespace g {
         }
 
         public finish_shopping(): void {
+            if (!this.is_shopping_time()) return;
             this.spawned_actors.forEach(a => a.is_valid() && a.destroy());
             this.on_enemy_killed(undefined);
         }
@@ -2404,7 +2405,7 @@ namespace g {
                 let shoppin_time = 20;
                 this.get_timer().delay(shoppin_time, this.finish_shopping, this);
                 this.get_timer().every(1, _ => {
-                    this.print(`next wave in ${--shoppin_time}`, 1.1);
+                    this.print(`shopping ends in ${--shoppin_time}`, 1.1);
                 }, v)
             }
 
@@ -2865,7 +2866,9 @@ namespace g {
         let s = qf_attach_prim(a, new qc_sprite_component(), {x, y, width: 14, height: 16, root: true});
         s.sprite = g_character_spritesheet.get_sprite(34);
 
-        let cost = get_item_cost(item) + (5 * ((g_stage/3)|0));
+        let cost = get_item_cost(item);
+        cost += Math.sign(cost) * (5 * ((g_stage/3)|0));
+
         let l = qf_attach_prim(a, new qc_label_component(), {y: -25});
         l.parent = s;
         l.set_text(get_item_desc(item) + '\ncost: ' + cost + '\njump to buy');
