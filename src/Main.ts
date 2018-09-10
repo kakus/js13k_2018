@@ -2264,8 +2264,8 @@ namespace g {
                     this.get_world().actors.forEach(a => a.getcmp(qc_wave_component)[0] && a.destroy());
                     g_time_dilation = 0.01;
                 }, this.owner);
-                let msg = qf_attach_prim(this.owner, new qc_label_component(), {x: g_canvas.width/4, y: g_canvas.height/4});
-                msg.set_text(`    you died\nwaves survived: ${g_stage}\n\npress z to restart`);
+                this.sprite.play('dead');
+                g_game_mode.print(`    you died\nwaves survived: ${g_stage}\n\npress z to restart`);
                 qs_input.keyboard.bind_keydown('z', _ => reset(), this.owner);
                 this.owner.components = this.owner.components.filter(c => {
                     return !((c instanceof qc_player_movement) || (c instanceof qc_player_controller)); });
@@ -2352,7 +2352,8 @@ namespace g {
         public begin_play(): void {
             [this.center_label] = this.owner.getcmp(qc_label_component);
             qi_g_on_enemy_killed.bind(this.on_enemy_killed, this);
-            this.get_timer().delay(1, this.spawn_wave, this);
+            this.get_timer().delay(2, this.spawn_wave, this);
+            this.print(`game title\n\ngame by kakus for js13k 2018`, 5);
         }
 
         public print(msg: string, lifespan: number = 0) {
@@ -2914,7 +2915,8 @@ namespace g {
 
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
         h.atk_lock = true;
-        h.hitpoints = 2;
+        h.hitpoints = 999;
+        h.gems = 200;
 
         let l = qf_attach_prim(a, new qc_label_component(), {y:-20});
         l.parent = r;
@@ -3070,6 +3072,7 @@ namespace g {
         idle.loop = true;
 
         s.sequences['jump'] = new qr_sprite_sequence(g_character_spritesheet, [9]);
+        s.sequences['dead'] = new qr_sprite_sequence(g_character_spritesheet, [12]);
         s.sequences['falling'] = new qr_sprite_sequence(g_character_spritesheet, [0]);
         let walk = s.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [9 ,10, 11, 10]);
         walk.loop = true;
@@ -3225,23 +3228,23 @@ namespace g {
 
 
         parse_level(
-`000000000000000000000000000000000000
-1                                  0
-1                                  0
-1 s              i              s  0
-10000          11111           00000
-1         1             0          0
-1                                  0
-1   0                          0   0
-1   0                          0   0
-1   0                          0   0
-1   0                          0   0
-1   0 si                    is 0   0
-1   1010101             01010110   0
-1               sis n              0
-1             1010101              0
-1                                  0
-1  s             @              s  0
+`00000000000000000000000000000000000
+1                                 0
+1                                 0
+1 s              i             s  0
+10000          11111          00000
+1         1             0         0
+1                                 0
+1   0                         0   0
+1   0                         0   0
+1   0                         0   0
+1   0                         0   0
+1   0 si                   is 0   0
+1   1010101             1010110   0
+1               sis n             0
+1             1010101             0
+1                                 0
+1  s             @             s  0
 000000000000000000001111111111111111`
                     , g_world)
 
