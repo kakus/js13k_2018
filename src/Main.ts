@@ -643,13 +643,18 @@ namespace g {
         }
 
         public execute() {
-            if (this.is_valid()) {
+            if (this.actor && this.actor.is_valid()) {
                 this.fn.call(this.ctx);
             }
         }
 
         public is_valid() {
-            return this.actor && this.actor.is_valid();
+            return this.actor && this.actor.is_valid() &&
+                   (this.type === qf_timer_type.repeat || (this.type === qf_timer_type.once && this.fire_in >= 0));
+        }
+
+        public invalidate() {
+            this.actor = undefined;
         }
 
         public reset() { 
@@ -675,7 +680,6 @@ namespace g {
                 e.fire_in -= delta;
                 if (e.fire_in <= 0) {
                     e.execute();
-                    if (e.type == qf_timer_type.once) this.events.splice(i, 1);
                     if (e.type == qf_timer_type.repeat) e.reset();
                 }
             }
@@ -1409,8 +1413,10 @@ namespace g {
         public floor_dist: number[][] = [];
         public jump_dist: number[][] = [];
 
+        // #DEBUG-BEGIN
         public d_considered: qm_vec[] = [];
         public d_hits: [qm_vec, qm_vec][] = [];
+        // #DEBUG-END
 
         constructor(
             public readonly width,
@@ -1581,7 +1587,6 @@ namespace g {
                 if (this.is_blocking(x, y)) {
                     hit_result = this.line_trace_tile(start_loc, end_loc, x, y);
                     if (hit_result) {
-                        this.d_hits.push(hit_result);
                         return true;
                     }
                 }
@@ -1641,7 +1646,6 @@ namespace g {
 
                             let hit = qm_line_trace_aabb(start, end, tile_aabb);
                             if (hit) {
-                                this.d_hits.push(hit);
                                 hits.push(hit);
                             }
                         }
@@ -2201,6 +2205,8 @@ namespace g {
             qs_input.keyboard.bind_keydown('2', _ => reset(), this);
             qs_input.keyboard.bind_keydown('3', _ => g_game_mode.spawn_wave(), this);
             qs_input.keyboard.bind_keydown('5', _ => qm_rnd_select(spawn_bat, spawn_goblin)(g_world, v2(30, 30)), this);
+            qs_input.keyboard.bind_keydown('6', _ => this.life++, this);
+            qs_input.keyboard.bind_keydown('7', _ => this.gem_count++, this);
             // #DEBUG-END
         }
 
@@ -2311,6 +2317,7 @@ namespace g {
                 case qg_item_type.fire_rate_upgrade: this.set_fire_rate(this.fire_rate + 2); return;
                 case qg_item_type.life_upgrade: this.life += 1; return;
                 case qg_item_type.coin_drop_upgrade: this.gems_per_kill += 2; return;
+                case qg_item_type.finish_shopping: g_game_mode.finish_shopping(); return;
             }
             qu_assert(false);
         }
@@ -2337,25 +2344,39 @@ namespace g {
             [],
             [[spawn_boss1, 2]] 
         ];
+        protected center_label: qc_label_component;
+        protected print_timer_handle: qf_timer_event;
 
         public spawned_actors: qf_actor[] = [];
         
         public begin_play(): void {
+            [this.center_label] = this.owner.getcmp(qc_label_component);
             qi_g_on_enemy_killed.bind(this.on_enemy_killed, this);
             this.get_timer().delay(1, this.spawn_wave, this);
         }
 
-        public on_enemy_killed(e: qf_actor): void {
-            if (this.is_shopping_time()) {
-                g_stage += 1;
-                this.spawned_actors.forEach(a => a.is_valid() && a.destroy());
-                this.get_timer().delay(3, this.spawn_wave, this);
+        public print(msg: string, lifespan: number = 0) {
+            this.center_label.visible = true;
+            this.center_label.set_text(msg);
+            if (this.print_timer_handle) {
+                this.print_timer_handle.invalidate();
             }
-            else if (this.spawned_actors.every(a => !a.is_valid() || a === e)) {
+            if (lifespan) {
+                this.print_timer_handle = this.get_timer().delay(lifespan, _ => this.center_label.visible = false, this);
+            }
+        }
+
+        public on_enemy_killed(e: qf_actor): void {
+            if (this.spawned_actors.every(a => !a.is_valid() || a === e)) {
                 qu_log(`wave ${g_stage} finished`);
                 g_stage += 1;
                 this.get_timer().delay(3, this.spawn_wave, this);
             }
+        }
+
+        public finish_shopping(): void {
+            this.spawned_actors.forEach(a => a.is_valid() && a.destroy());
+            this.on_enemy_killed(undefined);
         }
 
         public spawn_wave(): void {
@@ -2370,13 +2391,20 @@ namespace g {
                 for (let i = 0; i < qg_item_type.max_none; ++i) {
                     upg[i] = i;
                 }
+                let idx = qg_item_type.finish_shopping;
                 for (let pos of g_item_positions) {
-                    let idx = qm_rnd(0, upg.length - 1);
                     this.spawned_actors.push(spawn_shop_item(w, {x: pos.x, y: pos.y, item: upg[idx]}));
                     upg.splice(idx, 1);
+                    idx = qm_rnd(0, upg.length - 1) | 0;
                 }
-                this.spawned_actors.push(spawn_vendor(w, g_npc_positions[0]));
-                this.get_timer().delay(10, this.on_enemy_killed, this);
+                let v = spawn_vendor(w, g_npc_positions[0]);
+                this.spawned_actors.push(v);
+
+                let shoppin_time = 20;
+                this.get_timer().delay(shoppin_time, this.finish_shopping, this);
+                this.get_timer().every(1, _ => {
+                    this.print(`next wave in ${--shoppin_time}`, 1.1);
+                }, v)
             }
 
             for (let [_, num] of wave) {
@@ -2735,7 +2763,7 @@ namespace g {
         // mov.max_velocity = 150;
         // mov.max_velocity_on_ground =  50;
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
-        h.hitpoints = 4;
+        h.hitpoints = 8;
         return a;
     }
 
@@ -2836,12 +2864,10 @@ namespace g {
         let s = qf_attach_prim(a, new qc_sprite_component(), {x, y, width: 14, height: 16, root: true});
         s.sprite = g_character_spritesheet.get_sprite(34);
 
-        let item_type = qm_rnd(0, qg_item_type.max_none)|0 as qg_item_type;
-
-        let cost = get_item_cost(item_type) / 10;
+        let cost = get_item_cost(item) + (5 * ((g_stage/3)|0));
         let l = qf_attach_prim(a, new qc_label_component(), {y: -25});
         l.parent = s;
-        l.set_text(get_item_desc(item_type) + '\ncost: ' + cost + '\njump to buy');
+        l.set_text(get_item_desc(item) + '\ncost: ' + cost + '\njump to buy');
         l.visible = false;
 
         let p = qf_attach_cmp(a, new qc_pickable_component());
@@ -2853,8 +2879,10 @@ namespace g {
         p2.on_overlap_begins.bind(_ => {
             if (g_player_controller.gem_count >= cost) {
                 spawn_freeze_wave(world, {x, y});
-                world.player.getcmp(qc_player_controller)[0].apply_upgrade(item_type);
-                a.destroy()
+                g_player_controller.apply_upgrade(item);
+                if (a.is_valid()) {
+                    a.destroy();
+                }
                 g_player_controller.gem_count -= cost;
             }
         }, p2);
@@ -2886,7 +2914,7 @@ namespace g {
 
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
         h.atk_lock = true;
-        h.hitpoints = 999;
+        h.hitpoints = 2;
 
         let l = qf_attach_prim(a, new qc_label_component(), {y:-20});
         l.parent = r;
@@ -2993,7 +3021,6 @@ namespace g {
             // for (let [p, n] of hits) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
 
             this.tiles.d_considered = [];
-            this.tiles.d_hits = [];
         }
     }
 
@@ -3076,6 +3103,7 @@ namespace g {
     function spawn_game_mode(world: qf_world, {x, y}): qf_actor {
         let a = g_world.spawn_actor();
         g_game_mode = qf_attach_cmp(a, new qc_game_mode());
+        qf_attach_prim(a, new qc_label_component(), {x: g_canvas.width/4, y: g_canvas.height/4});
         return a;
     }
 
@@ -3125,6 +3153,7 @@ namespace g {
 
         life_upgrade,
         coin_drop_upgrade,
+        finish_shopping,
         max_none
     }
 
@@ -3139,19 +3168,21 @@ namespace g {
 
             case qg_item_type.life_upgrade:             return 'life';
             case qg_item_type.coin_drop_upgrade:        return 'increased coin drop';
+            case qg_item_type.finish_shopping:          return 'finish shopping';
         }
     }
     function get_item_cost(i: qg_item_type): number {
         switch (i) {
-            case qg_item_type.fire_rate_upgrade:       return 20;
-            case qg_item_type.bullet_range_upgrade:    return 20;
-            case qg_item_type.bullet_damage_upgrade:   return 100;
-            case qg_item_type.bullet_num_upgrade:      return 200;
-            case qg_item_type.bullet_explosion_upgrade:return 50;
+            case qg_item_type.fire_rate_upgrade:       return 5;
+            case qg_item_type.bullet_range_upgrade:    return 5;
+            case qg_item_type.bullet_damage_upgrade:   return 15;
+            case qg_item_type.bullet_num_upgrade:      return 20;
+            case qg_item_type.bullet_explosion_upgrade:return 5;
             // case qg_item_type.bullet_knockback_upgrade:return 80;
 
-            case qg_item_type.life_upgrade:            return 50;
-            case qg_item_type.coin_drop_upgrade:       return 100;
+            case qg_item_type.life_upgrade:            return 10;
+            case qg_item_type.coin_drop_upgrade:       return 10;
+            case qg_item_type.finish_shopping:         return -5;
         }
     }
 
@@ -3187,31 +3218,31 @@ namespace g {
         g_stage = 0;
         g_time_dilation = 1;
         
-        let t = new qf_tile_geometry(35, 18, 14);
+        let t = new qf_tile_geometry(36, 18, 14);
 
         g_world = new qf_world();
         g_world.geometry = t;
 
 
         parse_level(
-`00000000000000000000000000000000000
-1                                 0
-1                                 0
-1 s                             s 0
-10000         111111           0000
-1         1                       0
-1                           1     0
-1   0                             0
-1   0                             0
-1   0                             0
-1   0                             0
-1   0 si                   is     0
-1   1010101            01010110   0
-1               is  n             0
-1            10101010             0
-1                                 0
-1  s            @              s  0
-00000000000000000001111111111111111`
+`000000000000000000000000000000000000
+1                                  0
+1                                  0
+1 s              i              s  0
+10000          11111           00000
+1         1             0          0
+1                                  0
+1   0                          0   0
+1   0                          0   0
+1   0                          0   0
+1   0                          0   0
+1   0 si                    is 0   0
+1   1010101             01010110   0
+1               sis n              0
+1             1010101              0
+1                                  0
+1  s             @              s  0
+000000000000000000001111111111111111`
                     , g_world)
 
         spawn_game_mode(g_world, v2(0, 0));

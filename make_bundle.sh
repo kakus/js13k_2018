@@ -15,8 +15,14 @@ fi
 echo -- Coping files from bin to $OUTDIR 
 cp -rv bin bundle
 
+echo -- Copying source
+cp src/Main.ts $OUTDIR
+
 echo -- Removing debug code
-sed -i "" -e '/#DEBUG-BEGIN/,/#DEBUG-END/d' $OUTDIR/app.js
+sed -i "" -e '/#DEBUG-BEGIN/,/#DEBUG-END/d' $OUTDIR/Main.ts
+
+echo -- Compiling
+tsc -t es6 --outFile $OUTDIR/app.js $OUTDIR/Main.ts
 
 echo -- Minifying app.js
 java -jar compiler.jar \
@@ -38,7 +44,7 @@ html-minifier --collapse-whitespace --remove-comments --remove-optional-tags\
               -o $OUTDIR/index.html $OUTDIR/index.html
 
 echo -- Zipping
-zip -9 -x $OUTDIR/*.js -o $OUTDIR $OUTDIR/*
+zip -9 -o $OUTDIR $OUTDIR/index.html $OUTDIR/s.png
 
 echo -- Bundle Size
 ls -l "$OUTDIR.zip" | awk '{print $5 kB}'
