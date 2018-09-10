@@ -2328,6 +2328,9 @@ namespace g {
     class qc_game_mode extends qf_component_base {
 
         protected wave_def: wave_spawn_def[][] = [
+            // #DEBUG-BEGIN
+            [[spawn_goblin, 1], [spawn_bat, 0]],
+            // #DEBUG-END
             [[spawn_slime, 2], [spawn_bat, 1]],
             [[spawn_slime, 4], [spawn_bat, 2]],
             [],
@@ -2518,14 +2521,7 @@ namespace g {
                 }
                 else if (wall_hit) {
                     let [p, n] = wall_hit;
-                    if (n.x > 0) {
-                        this.vel.y = -this.jump_vel;
-                        this.vel.x = 80;
-                    }
-                    else if (n.x < 0) {
-                        this.vel.y = -this.jump_vel;
-                        this.vel.x = -80;
-                    }
+                    this.vel = v2(80 * n.x, -this.jump_vel);
                 }
             }
             else {
@@ -2649,10 +2645,14 @@ namespace g {
         public think_event: qf_timer_event;
         public path_filter: qf_path_filter = qi_default_walk_filter;
         public dimishing_return = 1;
+        public shoot_interval = 0;
 
         public begin_play() {
             super.begin_play()
             this.think_event = this.get_timer().every(0.033, this.think, this);
+            if (this.shoot_interval > 0) {
+                this.get_timer().every(this.shoot_interval, this.try_fire, this);
+            }
         }
 
         public think(delta: number) {
@@ -2673,8 +2673,6 @@ namespace g {
             }
         }
 
-
-
         public take_damage(e: qf_damage_event): void {
             this.think_event.fire_in = 0.5 * this.dimishing_return;
             this.mov.input = v2();
@@ -2683,6 +2681,35 @@ namespace g {
 
             this.dimishing_return = qm_clamp(this.dimishing_return - 0.1, 0, 1);
             super.take_damage(e);
+        }
+
+        public stop_moving(period: number = 1) {
+            this.think_event.fire_in = period;
+            this.mov.input = v2();
+            this.mov.vel = v2();
+            this.mov.acc = v2();
+        }
+
+        public try_fire(): void {
+            if (!this.mov.on_ground) {
+                return;
+            }
+
+            let w = this.get_world();
+
+            let this_pos = this.owner.get_pos();
+            let trg_pos = this.target.get_pos();
+            let dir = qm_sub(trg_pos, this_pos);
+
+            let hit = this.get_world().sweep_aabb(this_pos, qm_add(this_pos, v2(dir.x * 1000, 0)), v2(2, 2), qf_cc.player)
+            if (hit) {
+                this.stop_moving();
+
+                this.get_timer().delay(0.5, _ => {
+                    let shoot_dir = qm_clamp_mag(v2(dir.x, 0), 200);
+                    spawn_bullet(w, this_pos, shoot_dir, this.owner, { lifespan: 3, gravity: 0, cc: qf_cc.player | qf_cc.geom });
+                }, this);
+            }
         }
     }
 
@@ -2707,10 +2734,8 @@ namespace g {
             let this_pos = this.owner.get_pos();
             let trg_pos = this.target.get_pos();
 
-            this.think_event.fire_in = 0.5;
             this.spr.play('fire');            
-            this.mov.input = v2();
-            this.mov.vel = v2();
+            this.stop_moving();
 
             let dir = qm_clamp_mag(qm_sub(trg_pos, this_pos), 200);
             spawn_bullet(w, this_pos, dir, this.owner, { lifespan: 3, gravity: 0, cc: qf_cc.player});
@@ -2761,11 +2786,14 @@ namespace g {
         r.play('walk');
 
         let mov = qf_attach_cmp(a, new qi_ai_movement());
-        mov.ground_acc *= 0.2;
+        // mov.jump_vel *= 0.9;
+        // mov.ground_acc *= 0.2;
         // mov.max_velocity = 150;
-        // mov.max_velocity_on_ground =  50;
+        // mov.max_velocity_on_ground = 70;
+
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
         h.hitpoints = 8;
+        h.shoot_interval = 2;
         return a;
     }
 
@@ -2809,7 +2837,7 @@ namespace g {
         mov.default_max_velocity = 50;
 
         let h = qf_attach_cmp(a, new qc_boss_controller());
-        h.hitpoints = 20;
+        h.hitpoints = 30;
         h.gems = 30;
         h.path_filter = qi_flying_path_filter;
         return a;
