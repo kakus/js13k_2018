@@ -35,7 +35,7 @@ var g;
     function qm_sign(a) { return v2(Math.sign(a.x), Math.sign(a.y)); }
     function qm_mag_sqr(a) { return a.x * a.x + a.y * a.y; }
     function qm_mag(a) { return Math.sqrt(qm_mag_sqr(a)); }
-    function qm_unit(a) { let m = qm_mag(a); return qm_scale(a, 1 / m); }
+    function qm_unit(a) { qu_assert(a.x != 0 || a.y != 0); let m = qm_mag(a); return qm_scale(a, 1 / m); }
     function qm_clamp_mag(a, min, max = min) {
         let m = qm_mag(a);
         return m < min ? qm_scale(qm_unit(a), min) :
@@ -290,7 +290,7 @@ var g;
             return v2c(this.pos);
         }
         get_aabb(ext = qm_zero) {
-            return [v2c(this.pos), qm_add(qm_scale(qm_mul(this.bounds, this.scale), 0.5), ext)];
+            return [this.get_pos(), qm_add(qm_scale(v2(this.bounds.x * Math.abs(this.scale.x), this.bounds.y * Math.abs(this.scale.y)), 0.5), ext)];
         }
         get_local_transform() {
             return qm_mat(this.scale.x, 0, 0, this.scale.y, this.pos.x, this.pos.y);
@@ -407,7 +407,8 @@ var g;
                             hits.push(new qf_hit_result(hit[0], hit[1], actor));
                         }
                         else {
-                            hits.push(new qf_hit_result(start, qm_unit(qm_sub(start, end)), actor));
+                            let dir = qm_sub(start, end);
+                            hits.push(new qf_hit_result(start, qm_mag_sqr(dir) ? qm_unit(dir) : qm_up, actor));
                         }
                     }
                 }
@@ -432,12 +433,16 @@ var g;
             this.fire_in = delay;
         }
         execute() {
-            if (this.is_valid()) {
+            if (this.actor && this.actor.is_valid()) {
                 this.fn.call(this.ctx);
             }
         }
         is_valid() {
-            return this.actor && this.actor.is_valid();
+            return this.actor && this.actor.is_valid() &&
+                (this.type === 1 /* repeat */ || (this.type === 0 /* once */ && this.fire_in >= 0));
+        }
+        invalidate() {
+            this.actor = undefined;
         }
         reset() {
             this.fire_in += this.delay;
@@ -457,8 +462,6 @@ var g;
                 e.fire_in -= delta;
                 if (e.fire_in <= 0) {
                     e.execute();
-                    if (e.type == 0 /* once */)
-                        this.events.splice(i, 1);
                     if (e.type == 1 /* repeat */)
                         e.reset();
                 }
@@ -1060,20 +1063,20 @@ var g;
             keyboard.poll_gamepad = poll_gamepad;
             // #DEBUG-END
         })(keyboard = qs_input.keyboard || (qs_input.keyboard = {}));
-        let mouse;
-        (function (mouse) {
-            mouse.pos = v2();
-            function on_move(e) {
-                mouse.pos.x = e.offsetX;
-                mouse.pos.y = e.offsetY;
-                e.stopPropagation();
-            }
-            mouse.on_move = on_move;
-        })(mouse = qs_input.mouse || (qs_input.mouse = {}));
+        // export namespace mouse
+        // {
+        //     export const pos = v2();
+        //     export function on_move(e: MouseEvent)
+        //     {
+        //         pos.x = e.offsetX;
+        //         pos.y = e.offsetY;
+        //         e.stopPropagation();
+        //     }
+        // }
         function init(canvas) {
             window.addEventListener('keydown', keyboard.on_keydown);
             window.addEventListener('keyup', keyboard.on_keyup);
-            canvas.addEventListener('mousemove', mouse.on_move);
+            // canvas.addEventListener('mousemove', mouse.on_move);
         }
         qs_input.init = init;
     })(qs_input || (qs_input = {}));
@@ -1089,6 +1092,7 @@ var g;
         qm_bottom_right, qm_down
     ];
     class qf_tile_geometry {
+        // #DEBUG-END
         constructor(width, height, tile_size = 10) {
             this.width = width;
             this.height = height;
@@ -1097,6 +1101,7 @@ var g;
             this.blocking_dist = [];
             this.floor_dist = [];
             this.jump_dist = [];
+            // #DEBUG-BEGIN
             this.d_considered = [];
             this.d_hits = [];
             qu_assert(width > 0 && height > 0);
@@ -1236,7 +1241,6 @@ var g;
                 if (this.is_blocking(x, y)) {
                     hit_result = this.line_trace_tile(start_loc, end_loc, x, y);
                     if (hit_result) {
-                        this.d_hits.push(hit_result);
                         return true;
                     }
                 }
@@ -1253,16 +1257,23 @@ var g;
             const ts = this.tile_size;
             const half_ts = qm_scale(v2(ts, ts), 0.5);
             const half_size = qm_scale(size, 0.5);
-            const dir = qm_unit(qm_sub(end, start));
+            let dir = qm_sub(end, start);
+            if (qm_mag_sqr(dir))
+                dir = qm_unit(dir);
             let hit_result;
             this.foreach_tile_along_path(start, end, (x, y) => {
                 let hits = [];
                 for (let iy = y - ext.y; iy <= y + ext.y; ++iy) {
                     for (let ix = x - ext.x; ix <= x + ext.x; ++ix) {
                         let tile_center = qm_scale(v2(ix + 0.5, iy + 0.5), ts);
-                        let tile_dir = qm_unit(qm_sub(tile_center, start));
-                        if (qm_dot(dir, tile_dir) < -0.5) {
-                            continue;
+                        // dont check tiles behind trace dir
+                        {
+                            let tile_dir = qm_sub(tile_center, start);
+                            if (qm_mag_sqr(tile_dir) > 0) {
+                                if (qm_dot(dir, qm_unit(tile_dir)) < -0.5) {
+                                    continue;
+                                }
+                            }
                         }
                         // #DEBUG-BEGIN
                         if (this.d_considered)
@@ -1279,7 +1290,6 @@ var g;
                             }
                             let hit = qm_line_trace_aabb(start, end, tile_aabb);
                             if (hit) {
-                                this.d_hits.push(hit);
                                 hits.push(hit);
                             }
                         }
@@ -1495,7 +1505,7 @@ var g;
                 if (qm_mag(dir) <= radious) {
                     let m = a.getcmp(qi_ai_movement)[0];
                     if (m) {
-                        m.vel = qm_clamp_mag(dir, force, 0);
+                        m.vel = qm_clamp_mag(dir, force);
                     }
                     if (damage > 0) {
                         a.on_take_damage.broadcast(new qf_damage_event(damage, src, qm_unit(qm_scale(dir, -1))));
@@ -1757,7 +1767,7 @@ var g;
             [this.movement] = this.owner.getcmp(qc_player_movement);
             [this.sprite] = this.owner.getcmp(qc_anim_sprite_component);
             [this.stats] = this.owner.getcmp(qc_label_component);
-            [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite');
+            this.weapon_sprite = this.owner.getcmp(qc_sprite_component)[1];
             this.owner.on_take_damage.bind(this.take_damage, this);
             this.set_fire_rate(this.fire_rate);
             // #DEBUG-BEGIN
@@ -1765,6 +1775,8 @@ var g;
             qs_input.keyboard.bind_keydown('2', _ => reset(), this);
             qs_input.keyboard.bind_keydown('3', _ => g_game_mode.spawn_wave(), this);
             qs_input.keyboard.bind_keydown('5', _ => qm_rnd_select(spawn_bat, spawn_goblin)(g_world, v2(30, 30)), this);
+            qs_input.keyboard.bind_keydown('6', _ => this.life++, this);
+            qs_input.keyboard.bind_keydown('7', _ => this.gem_count++, this);
             // #DEBUG-END
         }
         tick(delta) {
@@ -1813,8 +1825,8 @@ var g;
                     this.get_world().actors.forEach(a => a.getcmp(qc_wave_component)[0] && a.destroy());
                     g_1.g_time_dilation = 0.01;
                 }, this.owner);
-                let msg = qf_attach_prim(this.owner, new qc_label_component(), { x: g_canvas.width / 4, y: g_canvas.height / 4 });
-                msg.set_text(`    you died\nwaves survived: ${g_stage}\n\npress z to restart`);
+                this.sprite.play('dead');
+                g_game_mode.print(`    you died\nwaves survived: ${g_stage}\n\npress z to restart`);
                 qs_input.keyboard.bind_keydown('z', _ => reset(), this.owner);
                 this.owner.components = this.owner.components.filter(c => {
                     return !((c instanceof qc_player_movement) || (c instanceof qc_player_controller));
@@ -1870,6 +1882,9 @@ var g;
                 case 6 /* coin_drop_upgrade */:
                     this.gems_per_kill += 2;
                     return;
+                case 7 /* finish_shopping */:
+                    g_game_mode.finish_shopping();
+                    return;
             }
             qu_assert(false);
         }
@@ -1878,6 +1893,9 @@ var g;
         constructor() {
             super(...arguments);
             this.wave_def = [
+                // #DEBUG-BEGIN
+                // [[spawn_goblin, 1], [spawn_bat, 0]],
+                // #DEBUG-END
                 [[spawn_slime, 2], [spawn_bat, 1]],
                 [[spawn_slime, 4], [spawn_bat, 2]],
                 [],
@@ -1886,31 +1904,52 @@ var g;
                 [],
                 [[spawn_boss1, 1]],
                 [],
-                [[spawn_goblin, 2], [spawn_bat, 4]],
-                [[spawn_goblin, 4], [spawn_bat, 4]],
+                [[spawn_goblin, 2], [spawn_bat, 0]],
+                [[spawn_goblin, 4], [spawn_bat, 2]],
                 [],
                 [[spawn_goblin, 2], [spawn_boss1, 1]],
-                [[spawn_goblin, 8], [spawn_bat, 0]],
+                [[spawn_goblin, 6], [spawn_bat, 2]],
                 [],
-                [[spawn_boss1, 2]]
+                [[spawn_boss1, 2]],
+                [],
+                [[spawn_goblin, 2], [spawn_boss1, 2]],
+                [[spawn_goblin, 4], [spawn_boss1, 4]],
+                [],
+                [[spawn_boss1, 2], [spawn_slime, 8]],
+                [[spawn_boss1, 8], [spawn_slime, 2]],
+                [],
+                [[spawn_goblin, 10]]
             ];
             this.spawned_actors = [];
         }
         begin_play() {
+            [this.center_label] = this.owner.getcmp(qc_label_component);
             qi_g_on_enemy_killed.bind(this.on_enemy_killed, this);
-            this.get_timer().delay(1, this.spawn_wave, this);
+            this.get_timer().delay(2, this.spawn_wave, this);
+            this.print(`game title\n\ngame by kakus for js13k 2018`, 5);
+        }
+        print(msg, lifespan = 0) {
+            this.center_label.visible = true;
+            this.center_label.set_text(msg);
+            if (this.print_timer_handle) {
+                this.print_timer_handle.invalidate();
+            }
+            if (lifespan) {
+                this.print_timer_handle = this.get_timer().delay(lifespan, _ => this.center_label.visible = false, this);
+            }
         }
         on_enemy_killed(e) {
-            if (this.is_shopping_time()) {
-                g_stage += 1;
-                this.spawned_actors.forEach(a => a.is_valid() && a.destroy());
-                this.get_timer().delay(3, this.spawn_wave, this);
-            }
-            else if (this.spawned_actors.every(a => !a.is_valid() || a === e)) {
+            if (this.spawned_actors.every(a => !a.is_valid() || a === e)) {
                 qu_log(`wave ${g_stage} finished`);
                 g_stage += 1;
                 this.get_timer().delay(3, this.spawn_wave, this);
             }
+        }
+        finish_shopping() {
+            if (!this.is_shopping_time())
+                return;
+            this.spawned_actors.forEach(a => a.is_valid() && a.destroy());
+            this.on_enemy_killed(undefined);
         }
         spawn_wave() {
             let w = this.get_world();
@@ -1920,16 +1959,22 @@ var g;
             this.spawned_actors = [];
             if (this.is_shopping_time()) {
                 let upg = [];
-                for (let i = 0; i < 7 /* max_none */; ++i) {
+                for (let i = 0; i < 8 /* max_none */; ++i) {
                     upg[i] = i;
                 }
+                let idx = 7 /* finish_shopping */;
                 for (let pos of g_item_positions) {
-                    let idx = qm_rnd(0, upg.length - 1);
                     this.spawned_actors.push(spawn_shop_item(w, { x: pos.x, y: pos.y, item: upg[idx] }));
                     upg.splice(idx, 1);
+                    idx = qm_rnd(0, upg.length - 1) | 0;
                 }
-                this.spawned_actors.push(spawn_vendor(w, g_npc_positions[0]));
-                this.get_timer().delay(10, this.on_enemy_killed, this);
+                let v = spawn_vendor(w, g_npc_positions[0]);
+                this.spawned_actors.push(v);
+                let shoppin_time = 20;
+                this.get_timer().delay(shoppin_time, this.finish_shopping, this);
+                this.get_timer().every(1, _ => {
+                    this.print(`shopping ends in ${--shoppin_time}`, 1.1);
+                }, v);
             }
             for (let [_, num] of wave) {
                 for (let i = 0; i < num; ++i) {
@@ -2030,14 +2075,7 @@ var g;
                 }
                 else if (wall_hit) {
                     let [p, n] = wall_hit;
-                    if (n.x > 0) {
-                        this.vel.y = -this.jump_vel;
-                        this.vel.x = 80;
-                    }
-                    else if (n.x < 0) {
-                        this.vel.y = -this.jump_vel;
-                        this.vel.x = -80;
-                    }
+                    this.vel = v2(80 * n.x, -this.jump_vel);
                 }
             }
             else {
@@ -2064,8 +2102,8 @@ var g;
             this.get_timer().every(0.1, this.update, this);
         }
         update() {
-            if (this.mov && this.spr) {
-                this.spr.flip_x = this.mov.vel.x > 0;
+            if (this.mov && this.mov.input.x != 0 && this.spr) {
+                this.spr.scale.x = this.mov.input.x > 0 ? -1 : 1;
             }
             if (this.overlaps_target() && !this.atk_lock) {
                 let dir = qm_sub(this.target.get_pos(), this.owner.get_pos());
@@ -2133,14 +2171,23 @@ var g;
             super(...arguments);
             this.path_filter = qi_default_walk_filter;
             this.dimishing_return = 1;
+            this.shoot_interval = 0;
         }
         begin_play() {
             super.begin_play();
             this.think_event = this.get_timer().every(0.033, this.think, this);
+            if (this.shoot_interval > 0) {
+                this.weapon_spr = this.owner.getcmp(qc_sprite_component)[1];
+                this.get_timer().every(this.shoot_interval, this.try_fire, this);
+            }
         }
         think(delta) {
             if (this.atk_lock) {
                 return;
+            }
+            if (this.weapon_spr) {
+                // this.weapon_spr.flip_x = this.mov.vel.x > 0;
+                this.weapon_spr.rot = Math.PI / 3;
             }
             this.dimishing_return = qm_clamp(this.dimishing_return + 0.01, 0, 1);
             let g = this.owner.world.geometry;
@@ -2155,11 +2202,39 @@ var g;
         }
         take_damage(e) {
             this.think_event.fire_in = 0.5 * this.dimishing_return;
-            this.mov.input = v2();
-            this.mov.vel.x -= 200 * e.dir.x * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
-            this.mov.vel.y -= 160 * this.dimishing_return * (this.mov.flying ? 0 : 1);
+            this.knock_back(e.dir);
             this.dimishing_return = qm_clamp(this.dimishing_return - 0.1, 0, 1);
             super.take_damage(e);
+        }
+        knock_back(dir, force = 160) {
+            this.mov.input = v2();
+            this.mov.vel.x -= force * dir.x * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
+            this.mov.vel.y -= force * this.dimishing_return * (this.mov.flying ? 0 : 1);
+        }
+        stop_moving(period = 1) {
+            this.think_event.fire_in = period;
+            this.mov.input = v2();
+            this.mov.vel = v2();
+            this.mov.acc = v2();
+        }
+        try_fire() {
+            if (!this.mov.on_ground) {
+                return;
+            }
+            let w = this.get_world();
+            let my_pos = this.owner.get_pos();
+            let dir = v2c(this.mov.vel.x > 0 ? qm_right : qm_left);
+            let hit = this.get_world().sweep_aabb(my_pos, qm_add(my_pos, v2(dir.x * 1000, 0)), v2(2, 2), 16 /* player */);
+            if (hit) {
+                this.stop_moving();
+                this.weapon_spr.rot = 0;
+                let muzzle_pos = qm_add(this.weapon_spr.get_pos(), qm_scale(qm_unit(dir), 3));
+                let shoot_dir = qm_clamp_mag(v2(dir.x, 0), 200);
+                this.get_timer().delay(0.5, _ => {
+                    spawn_bullet(w, muzzle_pos, shoot_dir, this.owner, { lifespan: 3, gravity: 0, cc: 16 /* player */ | 2 /* geom */ });
+                    this.knock_back(qm_unit(shoot_dir));
+                }, this);
+            }
         }
     }
     class qc_boss_controller extends qi_humanoid_controller {
@@ -2179,10 +2254,8 @@ var g;
             let w = this.get_world();
             let this_pos = this.owner.get_pos();
             let trg_pos = this.target.get_pos();
-            this.think_event.fire_in = 0.5;
             this.spr.play('fire');
-            this.mov.input = v2();
-            this.mov.vel = v2();
+            this.stop_moving();
             let dir = qm_clamp_mag(qm_sub(trg_pos, this_pos), 200);
             spawn_bullet(w, this_pos, dir, this.owner, { lifespan: 3, gravity: 0, cc: 16 /* player */ });
         }
@@ -2223,12 +2296,18 @@ var g;
         r.sequences['walk'].set_duration(0.15);
         r.offset.y = -5;
         r.play('walk');
+        let pistol = qf_attach_prim(a, new qc_sprite_component(), { x: -8, y: 0 });
+        pistol.parent = r;
+        // pistol.flip_x = true;
+        pistol.sprite = g_character_spritesheet.get_sprite(19);
         let mov = qf_attach_cmp(a, new qi_ai_movement());
-        mov.ground_acc *= 0.2;
+        // mov.jump_vel *= 0.9;
+        // mov.ground_acc *= 0.2;
         // mov.max_velocity = 150;
-        // mov.max_velocity_on_ground =  50;
+        // mov.max_velocity_on_ground = 70;
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
-        h.hitpoints = 4;
+        h.hitpoints = 8;
+        h.shoot_interval = 2;
         return a;
     }
     function spawn_bat(world, { x, y }) {
@@ -2264,7 +2343,7 @@ var g;
         mov.bounce_off_wall = true;
         mov.default_max_velocity = 50;
         let h = qf_attach_cmp(a, new qc_boss_controller());
-        h.hitpoints = 20;
+        h.hitpoints = 30;
         h.gems = 30;
         h.path_filter = qi_flying_path_filter;
         return a;
@@ -2307,15 +2386,15 @@ var g;
         e.duration = duration;
         return a;
     }
-    function spawn_shop_item(world, { x, y, item = 7 /* max_none */ }) {
+    function spawn_shop_item(world, { x, y, item = 8 /* max_none */ }) {
         let a = world.spawn_actor();
         let s = qf_attach_prim(a, new qc_sprite_component(), { x, y, width: 14, height: 16, root: true });
         s.sprite = g_character_spritesheet.get_sprite(34);
-        let item_type = qm_rnd(0, 7 /* max_none */) | 0;
-        let cost = get_item_cost(item_type) / 10;
+        let cost = get_item_cost(item);
+        cost += Math.sign(cost) * (5 * ((g_stage / 3) | 0));
         let l = qf_attach_prim(a, new qc_label_component(), { y: -25 });
         l.parent = s;
-        l.set_text(get_item_desc(item_type) + '\ncost: ' + cost + '\njump to buy');
+        l.set_text(get_item_desc(item) + '\ncost: ' + cost + '\njump to buy');
         l.visible = false;
         let p = qf_attach_cmp(a, new qc_pickable_component());
         p.on_overlap_begins.bind(_ => l.visible = true, p);
@@ -2325,8 +2404,10 @@ var g;
         p2.on_overlap_begins.bind(_ => {
             if (g_player_controller.gem_count >= cost) {
                 spawn_freeze_wave(world, { x, y });
-                world.player.getcmp(qc_player_controller)[0].apply_upgrade(item_type);
-                a.destroy();
+                g_player_controller.apply_upgrade(item);
+                if (a.is_valid()) {
+                    a.destroy();
+                }
                 g_player_controller.gem_count -= cost;
             }
         }, p2);
@@ -2353,6 +2434,7 @@ var g;
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
         h.atk_lock = true;
         h.hitpoints = 999;
+        h.gems = 200;
         let l = qf_attach_prim(a, new qc_label_component(), { y: -20 });
         l.parent = r;
         l.set_text(qm_rnd_select('shopping time', 'only best deals', 'sale sale!'));
@@ -2440,7 +2522,6 @@ var g;
             // let hits = this.tiles.d_hits;
             // for (let [p, n] of hits) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
             this.tiles.d_considered = [];
-            this.tiles.d_hits = [];
         }
     }
     // #DEBUG-END
@@ -2477,6 +2558,7 @@ var g;
         let idle = s.sequences['idle'] = new qr_sprite_sequence(g_character_spritesheet, [0, 1]);
         idle.loop = true;
         s.sequences['jump'] = new qr_sprite_sequence(g_character_spritesheet, [9]);
+        s.sequences['dead'] = new qr_sprite_sequence(g_character_spritesheet, [12]);
         s.sequences['falling'] = new qr_sprite_sequence(g_character_spritesheet, [0]);
         let walk = s.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [9, 10, 11, 10]);
         walk.loop = true;
@@ -2484,7 +2566,7 @@ var g;
         s.play('walk');
         s.offset = v2(0, -1);
         qf_attach_prim(a, s, { x, y, width: 10, height: 14, coll_mask: 16 /* player */, root: true });
-        let pistol = qf_attach_prim(a, new qc_sprite_component(), { x: 10, y: 0, name: 'weapon_sprite' });
+        let pistol = qf_attach_prim(a, new qc_sprite_component(), { x: 10, y: 0 });
         pistol.parent = s;
         pistol.flip_x = true;
         pistol.sprite = g_character_spritesheet.get_sprite(18);
@@ -2501,6 +2583,7 @@ var g;
     function spawn_game_mode(world, { x, y }) {
         let a = g_world.spawn_actor();
         g_game_mode = qf_attach_cmp(a, new qc_game_mode());
+        qf_attach_prim(a, new qc_label_component(), { x: g_canvas.width / 4, y: g_canvas.height / 4 });
         return a;
     }
     function spawn_tile(actor, { x, y }, id) {
@@ -2545,18 +2628,20 @@ var g;
             // case qg_item_type.bullet_knockback_upgrade: return 'increased bullet knockback';
             case 5 /* life_upgrade */: return 'life';
             case 6 /* coin_drop_upgrade */: return 'increased coin drop';
+            case 7 /* finish_shopping */: return 'finish shopping';
         }
     }
     function get_item_cost(i) {
         switch (i) {
-            case 0 /* fire_rate_upgrade */: return 20;
-            case 1 /* bullet_range_upgrade */: return 20;
-            case 2 /* bullet_damage_upgrade */: return 100;
-            case 3 /* bullet_num_upgrade */: return 200;
-            case 4 /* bullet_explosion_upgrade */: return 50;
+            case 0 /* fire_rate_upgrade */: return 5;
+            case 1 /* bullet_range_upgrade */: return 5;
+            case 2 /* bullet_damage_upgrade */: return 15;
+            case 3 /* bullet_num_upgrade */: return 20;
+            case 4 /* bullet_explosion_upgrade */: return 5;
             // case qg_item_type.bullet_knockback_upgrade:return 80;
-            case 5 /* life_upgrade */: return 50;
-            case 6 /* coin_drop_upgrade */: return 100;
+            case 5 /* life_upgrade */: return 10;
+            case 6 /* coin_drop_upgrade */: return 10;
+            case 7 /* finish_shopping */: return -5;
         }
     }
     let g_world;
@@ -2583,27 +2668,27 @@ var g;
         }
         g_stage = 0;
         g_1.g_time_dilation = 1;
-        let t = new qf_tile_geometry(35, 18, 14);
+        let t = new qf_tile_geometry(36, 18, 14);
         g_world = new qf_world();
         g_world.geometry = t;
         parse_level(`00000000000000000000000000000000000
 1                                 0
 1                                 0
-1 s                             s 0
-10000         111111           0000
-1         1                       0
-1                           1     0
-1   0                             0
-1   0                             0
-1   0                             0
-1   0                             0
-1   0 si                   is     0
-1   1010101            01010110   0
-1               is  n             0
-1            10101010             0
+1 s              i             s  0
+10000          11111          00000
+1         1             0         0
 1                                 0
-1  s            @              s  0
-00000000000000000001111111111111111`, g_world);
+1   0                         0   0
+1   0                         0   0
+1   0                         0   0
+1   0                         0   0
+1   0 si                   is 0   0
+1   1010101             1010110   0
+1               sis n             0
+1             1010101             0
+1                                 0
+1  s             @             s  0
+000000000000000000001111111111111111`, g_world);
         spawn_game_mode(g_world, v2(0, 0));
     }
     function main() {
