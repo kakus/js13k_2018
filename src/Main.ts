@@ -343,6 +343,16 @@ namespace g {
         public get_world() { return this.owner.world; }
         public get_timer() { return this.owner.world.timer; }
         public is_valid() { return this.owner && this.owner.is_valid(); }
+        public destroy(): void { 
+            if (this.owner) {
+                let idx = this.owner.components.indexOf(this);
+                qu_assert(idx >= 0);
+                if (idx >= 0) {
+                    this.owner.components.splice(idx, 1);
+                }
+                this.owner = undefined;
+            }
+        }
     }
 
     abstract class qf_scene_component extends qf_component_base
@@ -549,9 +559,9 @@ namespace g {
         
     }
 
-    function qf_easing_sin_inout(t: number) {
-        return (1 - Math.cos(Math.PI * t)) / 2;
-    }
+    // function qf_easing_sin_inout(t: number) {
+    //     return (1 - Math.cos(Math.PI * t)) / 2;
+    // }
 
     // class qf_tween {
     //     protected next: qf_tween;
@@ -637,25 +647,24 @@ namespace g {
             public type: qf_timer_type,
             public delay: number,
             public fn: Function,
-            public actor: qf_actor,
-            public ctx?: any
+            public ctx: qf_bindable,
         ) { 
             this.fire_in = delay;
         }
 
         public execute() {
-            if (this.actor && this.actor.is_valid()) {
+            if (this.ctx && this.ctx.is_valid()) {
                 this.fn.call(this.ctx);
             }
         }
 
         public is_valid() {
-            return this.actor && this.actor.is_valid() &&
+            return this.ctx && this.ctx.is_valid() &&
                    (this.type === qf_timer_type.repeat || (this.type === qf_timer_type.once && this.fire_in >= 0));
         }
 
         public invalidate() {
-            this.actor = undefined;
+            this.ctx = undefined;
         }
 
         public reset() { 
@@ -686,26 +695,18 @@ namespace g {
             }
         }
 
-        protected add_timer(time: number, type: qf_timer_type, fn: Function, ctx: qf_actor | qf_component_base): qf_timer_event {
-            let actor: qf_actor;
-
-            if (ctx instanceof qf_actor) {
-                actor = ctx;
-            } else {
-                actor = ctx.owner;
-            } 
-        
-            let e = new qf_timer_event(this, type, time, fn, actor, ctx);
+        protected add_timer(time: number, type: qf_timer_type, fn: Function, ctx: qf_bindable): qf_timer_event {
+            let e = new qf_timer_event(this, type, time, fn, ctx);
             this.events.push(e);
             return e;
         }
 
-        public delay(delay: number, fn: Function, ctx: qf_actor | qf_component_base): qf_timer_event
+        public delay(delay: number, fn: Function, ctx: qf_bindable): qf_timer_event
         {
             return this.add_timer(delay, qf_timer_type.once, fn, ctx);
         }
 
-        public every(timespan: number, fn: Function, ctx: qf_actor | qf_component_base): qf_timer_event
+        public every(timespan: number, fn: Function, ctx: qf_bindable): qf_timer_event
         {
             return this.add_timer(timespan, qf_timer_type.repeat, fn, ctx);
         }
@@ -1400,10 +1401,15 @@ namespace g {
         qm_left, qm_right];
 
     // order of these offsets matter for algorithm execution
-    const qf_c_breadth_search_offsets = [
+    const qf_c_offsets_order_for_walking_ai = [
         qm_left, qm_right, qm_up,
         qm_top_left, qm_top_right, qm_bottom_left,
         qm_bottom_right, qm_down];
+
+    const qf_c_offsets_order_for_flying_ai = [
+        qm_bottom_left, qm_bottom_right, qm_down,
+        qm_top_left, qm_top_right, 
+        qm_left, qm_right, qm_up];
 
     type qf_path_filter = (geom: qf_tile_geometry, s: qm_vec, e: qm_vec) => boolean;
 
@@ -1678,7 +1684,7 @@ namespace g {
             return hit_result;
         }
 
-        public find_path(start: qm_vec, end: qm_vec, is_conn_allowed: qf_path_filter): qm_vec[] {
+        public find_path(start: qm_vec, end: qm_vec, is_conn_allowed: qf_path_filter, neighbour_offsets_order = qf_c_offsets_order_for_walking_ai): qm_vec[] {
             let s = this.project(start);
             let e = this.project(end);
             let id = (v: qm_vec) => v.y * this.width + v.x;
@@ -1690,7 +1696,7 @@ namespace g {
                 let start = open.shift();
                 if (qm_eq(start, e)) break;
 
-                for (let offset of qf_c_breadth_search_offsets) {
+                for (let offset of neighbour_offsets_order) {
                     let n_loc = qm_add(start, offset);
 
                     if (!this.is_valid(n_loc)) {
@@ -1822,6 +1828,16 @@ namespace g {
         }
     }
 
+    class qc_rect_component extends qf_scene_component {
+        public color: string = '#fff';
+        public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
+            ctx.fillStyle = '#000'
+            ctx.fillRect(-this.bounds.x/2, -this.bounds.y/2, this.bounds.x, this.bounds.y);
+            ctx.fillStyle = this.color;
+            ctx.fillRect(-this.bounds.x/2 + 1, -this.bounds.y/2 + 1, this.bounds.x - 2, this.bounds.y - 2);
+        }
+    }
+
     class qc_sprite_component extends qf_scene_component {
         public sprite = new qr_sprite_data(null, null, qm_zero, v2(10, 10));
         public flip_x = false;
@@ -1898,7 +1914,7 @@ namespace g {
             if (a.root && (a.root.collision_mask & cc)) {
                 let dir = qm_sub(a.root.get_pos(), p);
                 if (qm_mag(dir) <= radious) {
-                    let m = a.getcmp(qi_ai_movement)[0];
+                    let m = a.getcmp(qc_ai_movement)[0];
                     if (m) {
                         m.vel = qm_clamp_mag(dir, force);
                     }
@@ -1921,6 +1937,7 @@ namespace g {
         }
 
         public tick(delta: number) {
+            delta *= 1/g_time_dilation;
             if (this.elpased > this.duration) {
                 this.owner.destroy();
                 g_scene_offset = v2();
@@ -1949,8 +1966,8 @@ namespace g {
         public wants_tick = true;
         public start_radious = 10;
         public end_radious = 400;
-        public expand_durtation = 0.25;
-        public slomo_duration = 0.15;
+        public expand_durtation = 0.45;
+        public slomo_duration = 0.35;
         protected elapsed = 0;
 
         public begin_play(): void {
@@ -2088,16 +2105,14 @@ namespace g {
                         let r = this.owner.root;
                         let dist = qm_mag(qm_sub(p, r.pos)) - r.bounds.x / 2;
 
-                        let do_jump = false;
+                        let do_jump = dist < 5;
                         let jump_off_wall = false;
 
                         if (move_left) {
                             jump_off_wall = n.x < 0;
-                            do_jump = dist <= (n.x > 0 ? 1 : 5);
                         }
                         if (move_right) {
                             jump_off_wall = n.x > 0;
-                            do_jump = dist <= (n.x < 0 ? 1 : 5);
                         }
 
                         if (do_jump) {
@@ -2111,8 +2126,12 @@ namespace g {
 
         public tick(delta: number)
         {
-            delta = delta * 1/g_time_dilation;
-            this.process_input();
+            if (g_time_dilation < 1) {
+                delta = (delta * 1/g_time_dilation) * 0.8;
+                this.gravity = 800;
+            } else {
+                this.gravity = 1000;
+            }
             super.tick(delta);
         }
     }
@@ -2188,6 +2207,7 @@ namespace g {
 
         // other setup
         public gems_per_kill = 3;
+        public skill_cooldown = 5;
 
         public life = 2;
         public gem_count = 0;
@@ -2196,6 +2216,7 @@ namespace g {
 
         protected fire_rate = 4;
         protected fire_delegate: Function;
+        protected skill_lock = false;
         protected timer = new qf_timer();
 
         public begin_play()
@@ -2208,8 +2229,10 @@ namespace g {
             this.owner.on_take_damage.bind(this.take_damage, this);
             this.set_fire_rate(this.fire_rate);
 
+            qs_input.keyboard.bind_keydown('x', this.activate_skill, this);
+
             // #DEBUG-BEGIN
-            qs_input.keyboard.bind_keydown('1', _ => g_world.actors.forEach(a => a.getcmp(qi_enemy_controller)[0] ? a.on_take_damage.broadcast(new qf_damage_event(9999, this.owner, qm_up)) : 1), this);
+            qs_input.keyboard.bind_keydown('1', _ => g_world.actors.forEach(a => a.getcmp(qc_enemy_controller)[0] ? a.on_take_damage.broadcast(new qf_damage_event(9999, this.owner, qm_up)) : 1), this);
             qs_input.keyboard.bind_keydown('2', _ => reset(), this);
             qs_input.keyboard.bind_keydown('3', _ => g_game_mode.spawn_wave(), this);
             qs_input.keyboard.bind_keydown('5', _ => qm_rnd_select(spawn_bat, spawn_goblin)(g_world, v2(30, 30)), this);
@@ -2247,36 +2270,71 @@ namespace g {
             this.stats.set_text(`lives: ${this.life}\ngems:  ${this.gem_count}\nwave:  ${g_stage}`);
             this.stats.pos = qm_add(v2(20, 20), qm_scale(this.stats.bounds, 0.5));
         }
+        
+        protected activate_skill() {
+            if (this.skill_lock) {
+                return;
+            }
+            this.skill_lock = true;
+
+            let bar = qf_attach_prim(this.owner, new qc_rect_component(), {y: -18, height: 3, width: 30});
+            bar.parent = this.owner.root;
+            let elapsed = 0, dt = 0.2;
+            this.get_timer().every(dt, _ => {
+                elapsed += dt;
+                if (elapsed < this.skill_cooldown) {
+                    bar.bounds.x = 30 * (1 - (elapsed / this.skill_cooldown));
+                } else {
+                    bar.destroy();
+                    this.skill_lock = false;
+                }
+            }, bar);
+
+            spawn_freeze_wave(this.get_world(), qm_add(this.owner.get_pos(), v2(0, 3)));
+        }
 
         protected take_damage(e: qf_damage_event): void {
-            if (!this.should_take_damage) {
+            if (!this.should_take_damage || g_time_dilation < 1) {
                 return;
             }
 
+            // knockback
             this.movement.vel.x += e.dir.x * 100;
             this.movement.vel.y -= 100;
-            this.sprite.blink();
 
             this.life -= 1;
             spawn_freeze_wave(this.get_world(), qm_add(this.owner.get_pos(), v2(0, 3)));
 
             if (this.life > 0) {
+                this.sprite.blink();
+
                 // just for shake
                 spawn_explosion(this.get_world(), {x:-100, y:-100, duration: 0.1});
-                // invicibly frame
-                this.should_take_damage = false;
-                this.get_timer().delay(0.5, _ => this.should_take_damage = true, this);
             }
             else {
-                this.get_timer().delay(0.05, _ => {
-                    this.get_world().actors.forEach(a => a.getcmp(qc_wave_component)[0] && a.destroy());
-                    g_time_dilation = 0.01;
-                }, this.owner);
-                this.sprite.play('dead');
-                g_game_mode.print(`    you died\nwaves survived: ${g_stage}\n\npress z to restart`);
-                qs_input.keyboard.bind_keydown('z', _ => reset(), this.owner);
-                this.owner.components = this.owner.components.filter(c => {
-                    return !((c instanceof qc_player_movement) || (c instanceof qc_player_controller)); });
+                this.handle_death();
+            }
+        }
+
+        public handle_death() {
+            let w = this.get_world();
+            this.get_timer().delay(0.05, _ => {
+                w.actors.forEach(a => a.getcmp(qc_wave_component)[0] && a.destroy());
+                g_time_dilation = 0.01;
+            }, this.owner);
+            this.sprite.play('dead');
+            g_game_mode.print(`    you died\nwaves survived: ${g_stage}\n\npress z to restart`);
+            qs_input.keyboard.bind_keydown('z', _ => setTimeout(reset, 0), this.owner);
+
+            // switch movement to projectile as to look better
+            {
+                let m = qf_attach_cmp(this.owner, new qc_projectile_movement());
+                m.vel = this.movement.vel
+                m.collision_channel = qf_cc.geom;
+                m.rotate_root = false;
+                m.bounce_off_walls = true;
+                this.movement.destroy();
+                this.destroy();
             }
         }
 
@@ -2337,29 +2395,33 @@ namespace g {
 
         protected wave_def: wave_spawn_def[][] = [
             // #DEBUG-BEGIN
-            // [[spawn_goblin, 1], [spawn_bat, 0]],
+            // [[spawn_boss1, 1], [spawn_bat, 1]],
             // #DEBUG-END
-            [[spawn_slime, 2], [spawn_bat, 1]],
-            [[spawn_slime, 4], [spawn_bat, 2]],
+            [[spawn_slime, 2]],
+            [[spawn_slime, 6]],
+            [[spawn_bat, 1]],
             [],
-            [[spawn_slime, 8], [spawn_bat, 4]],
-            [[spawn_slime, 0], [spawn_bat, 8]],
+            [[spawn_slime, 4], [spawn_bat, 2]],
+            [[spawn_slime, 6], [spawn_bat, 2]],
+            [[spawn_bat, 6]],
             [],
             [[spawn_boss1, 1]],
             [],
-            [[spawn_goblin, 2], [spawn_bat, 0]],
-            [[spawn_goblin, 4], [spawn_bat, 2]],
+            [[spawn_goblin, 1]],
+            [[spawn_goblin, 2], [spawn_slime, 2]],
+            [[spawn_goblin, 2], [spawn_bat, 2]],
             [],
-            [[spawn_goblin, 2], [spawn_boss1, 1]],
+            [[spawn_goblin, 2], [spawn_bat, 4]],
+            [[spawn_goblin, 4], [spawn_bat, 4]],
             [[spawn_goblin, 6], [spawn_bat, 2]],
             [],
             [[spawn_boss1, 2]],
             [],
-            [[spawn_goblin, 2], [spawn_boss1, 2]],
-            [[spawn_goblin, 4], [spawn_boss1, 4]],
+            [[spawn_goblin, 2], [spawn_boss1, 1]],
+            [[spawn_goblin, 4], [spawn_boss1, 2]],
             [],
-            [[spawn_boss1, 2], [spawn_slime, 8]],
-            [[spawn_boss1, 8], [spawn_slime, 2]],
+            [[spawn_boss1, 2], [spawn_slime, 10]],
+            [[spawn_boss1, 4]],
             [],
             [[spawn_goblin, 10]]
         ];
@@ -2372,7 +2434,8 @@ namespace g {
             [this.center_label] = this.owner.getcmp(qc_label_component);
             qi_g_on_enemy_killed.bind(this.on_enemy_killed, this);
             this.get_timer().delay(2, this.spawn_wave, this);
-            this.print(`game title\n\ngame by kakus for js13k 2018`, 5);
+            this.print(`game title\n\ngame by kakus\njs13k 2018`, 5);
+            this.get_timer().delay(5, _ => this.print(`controls\narrows + z x`, 10), this);
         }
 
         public print(msg: string, lifespan: number = 0) {
@@ -2453,7 +2516,9 @@ namespace g {
     }
 
 // ai
+// #DEBUG-BEGIN
     var qi_g_paths: qm_vec[][] = [];
+// #DEBUG-END
     const qi_g_on_enemy_killed = new qf_multicast_delegate<(a: qf_actor) => void>();
 
     function qi_flying_path_filter(geom: qf_tile_geometry, s: qm_vec, e: qm_vec): boolean {
@@ -2493,7 +2558,7 @@ namespace g {
         return true;
     }
 
-    class qi_ai_movement extends qc_character_movement
+    class qc_ai_movement extends qc_character_movement
     {
         // setup
         public ground_acc = 500;
@@ -2546,10 +2611,10 @@ namespace g {
         }
     }
 
-    class qi_enemy_controller extends qf_component_base
+    class qc_enemy_controller extends qf_component_base
     {
         public root: qf_scene_component;
-        public mov: qi_ai_movement;
+        public mov: qc_ai_movement;
         public spr: qc_anim_sprite_component;
 
 
@@ -2566,13 +2631,15 @@ namespace g {
         public begin_play()
         {
             super.begin_play();
-            [this.mov] = this.owner.getcmp(qi_ai_movement);
+            [this.mov] = this.owner.getcmp(qc_ai_movement);
             [this.spr] = this.owner.getcmp(qc_anim_sprite_component);
 
             this.target = this.owner.world.player;
             this.root = this.owner.root;
             this.owner.on_take_damage.bind(this.take_damage, this);
             this.get_timer().every(0.1, this.update, this);
+
+            this.hitpoints *= Math.ceil(g_stage / 26);
         }
 
         protected update(): void {
@@ -2623,7 +2690,7 @@ namespace g {
         }
     }
 
-    class qi_slime_controller extends qi_enemy_controller
+    class qi_slime_controller extends qc_enemy_controller
     {
         public begin_play()
         {
@@ -2657,9 +2724,8 @@ namespace g {
         }
     }
 
-    class qi_humanoid_controller extends qi_enemy_controller {
+    class qi_humanoid_controller extends qc_enemy_controller {
         public think_event: qf_timer_event;
-        public path_filter: qf_path_filter = qi_default_walk_filter;
         public dimishing_return = 1;
         public shoot_interval = 0;
 
@@ -2686,7 +2752,9 @@ namespace g {
             this.dimishing_return = qm_clamp(this.dimishing_return + 0.01, 0, 1);
 
             let g = this.owner.world.geometry as qf_tile_geometry;
-            let path = g.find_path(this.root.pos, this.target.root.pos, this.path_filter);
+            let path = g.find_path(this.root.pos, this.target.root.pos,
+                this.mov.flying ? qi_flying_path_filter : qi_default_walk_filter,
+                this.mov.flying ? qf_c_offsets_order_for_flying_ai : qf_c_offsets_order_for_walking_ai);
             if (path) {
                 this.mov.input = qm_scale(qm_sign(qm_sub(path[1], path[0])), qm_rnd(0.5, 1));
             }
@@ -2746,8 +2814,12 @@ namespace g {
         public begin_play() {
             super.begin_play();
             this.get_timer().every(5, _ => {
+
+                this.spr.play('fire');
+                this.stop_moving(1.8);
+
                 for (let i = 0; i < 3; ++i)
-                    this.get_timer().delay(0.1 * i, this.try_fire, this);
+                    this.get_timer().delay(.8 + 0.1 * i, this.try_fire, this);
                 }, this);
         }
 
@@ -2761,9 +2833,6 @@ namespace g {
             let w = this.get_world();
             let this_pos = this.owner.get_pos();
             let trg_pos = this.target.get_pos();
-
-            this.spr.play('fire');            
-            this.stop_moving();
 
             let dir = qm_clamp_mag(qm_sub(trg_pos, this_pos), 200);
             spawn_bullet(w, this_pos, dir, this.owner, { lifespan: 3, gravity: 0, cc: qf_cc.player});
@@ -2797,7 +2866,7 @@ namespace g {
         r.play('idle');
         r.offset.y -= 3;
     
-        qf_attach_cmp(a, new qi_ai_movement());
+        qf_attach_cmp(a, new qc_ai_movement());
         let c = qf_attach_cmp(a, new qi_slime_controller());
         c.hitpoints = 2;
         return a;
@@ -2818,14 +2887,14 @@ namespace g {
         // pistol.flip_x = true;
         pistol.sprite = g_character_spritesheet.get_sprite(19);
 
-        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        let mov = qf_attach_cmp(a, new qc_ai_movement());
         // mov.jump_vel *= 0.9;
         // mov.ground_acc *= 0.2;
         // mov.max_velocity = 150;
         // mov.max_velocity_on_ground = 70;
 
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
-        h.hitpoints = 8;
+        h.hitpoints = 16;
         h.shoot_interval = 2;
         return a;
     }
@@ -2839,7 +2908,7 @@ namespace g {
         w.set_duration(0.25);
         r.play('walk');
 
-        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        let mov = qf_attach_cmp(a, new qc_ai_movement());
         mov.gravity = 0;
         mov.flying = true;
         mov.bounce_off_wall = true;
@@ -2847,7 +2916,6 @@ namespace g {
 
         let h = qf_attach_cmp(a, new qi_humanoid_controller());
         h.hitpoints = 3;
-        h.path_filter = qi_flying_path_filter;
         return a;
     }
 
@@ -2863,7 +2931,7 @@ namespace g {
         r.sequences['fire'] = new qr_sprite_sequence(g_character_spritesheet, [36]);
         // r.scale = v2(2, 2);
 
-        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        let mov = qf_attach_cmp(a, new qc_ai_movement());
         mov.gravity = 0;
         mov.flying = true;
         mov.bounce_off_wall = true;
@@ -2872,7 +2940,6 @@ namespace g {
         let h = qf_attach_cmp(a, new qc_boss_controller());
         h.hitpoints = 30;
         h.gems = 30;
-        h.path_filter = qi_flying_path_filter;
         return a;
     }
 
@@ -2908,9 +2975,10 @@ namespace g {
         return a;
     }
 
-    function spawn_freeze_wave(world: qf_world, {x, y}): qf_actor {
+    function spawn_freeze_wave(world: qf_world, {x, y, duration = 0.15}): qf_actor {
         let a = world.spawn_actor();
         let r = qf_attach_prim(a, new qc_wave_component(), {x, y, root: true});
+        r.slomo_duration = duration;
         return a;
     }
 
@@ -2973,7 +3041,7 @@ namespace g {
         walk.loop = true;
         walk.set_duration(0.25);
 
-        let mov = qf_attach_cmp(a, new qi_ai_movement());
+        let mov = qf_attach_cmp(a, new qc_ai_movement());
         mov.max_velocity_on_ground *= 1.5;
         mov.air_acc *= 1.5;
 
@@ -3262,6 +3330,10 @@ namespace g {
 
     function tick()
     {
+        // #DEBUG-BEGIN
+        qs_input.keyboard.poll_gamepad();
+        // #DEBUG-END
+
         g_world.tick(0.016 * g_time_dilation);
 
         g_context.save()
@@ -3272,24 +3344,15 @@ namespace g {
 
         g_context.restore();
 
-        // #DEBUG-BEGIN
-        qs_input.keyboard.poll_gamepad();
-        // #DEBUG-END
         window.requestAnimationFrame(tick);
     }
 
     function reset() {
-        if (g_world) {
-            qu_log('score: ', g_stage);
-        }
         g_stage = 0;
         g_time_dilation = 1;
         
-        let t = new qf_tile_geometry(36, 18, 14);
-
         g_world = new qf_world();
-        g_world.geometry = t;
-
+        g_world.geometry = new qf_tile_geometry(36, 18, 14);
 
         parse_level(
 `00000000000000000000000000000000000
@@ -3297,7 +3360,7 @@ namespace g {
 1                                 0
 1 s              i             s  0
 10000          11111          00000
-1         1             0         0
+1        11             00        0
 1                                 0
 1   0                         0   0
 1   0                         0   0
@@ -3312,7 +3375,7 @@ namespace g {
 000000000000000000001111111111111111`
                     , g_world)
 
-        spawn_game_mode(g_world, v2(0, 0));
+        spawn_game_mode(g_world, qm_zero);
     }
 
     function main()
