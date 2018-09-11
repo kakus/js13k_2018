@@ -14,7 +14,6 @@ fi
 
 echo -- Coping files from bin to $OUTDIR 
 cp -rv bin bundle
-
 echo -- Copying source
 cp src/Main.ts $OUTDIR
 

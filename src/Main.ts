@@ -37,7 +37,7 @@ namespace g {
     function qm_sign(a: qm_vec) { return v2(Math.sign(a.x), Math.sign(a.y)); }
     function qm_mag_sqr(a: qm_vec) { return a.x * a.x + a.y * a.y; }
     function qm_mag(a: qm_vec) { return Math.sqrt(qm_mag_sqr(a)); }
-    function qm_unit(a: qm_vec) { let m = qm_mag(a); return qm_scale(a, 1/m); }
+    function qm_unit(a: qm_vec) { qu_assert(a.x != 0 || a.y != 0); let m = qm_mag(a); return qm_scale(a, 1/m); }
     function qm_clamp_mag(a: qm_vec, min: number, max: number = min) {
         let m = qm_mag(a);
         return m < min ? qm_scale(qm_unit(a), min) :
@@ -384,7 +384,7 @@ namespace g {
         }
 
         public get_aabb(ext: qm_vec = qm_zero): qm_aabb {
-            return [v2c(this.pos), qm_add(qm_scale(qm_mul(this.bounds, this.scale), 0.5), ext)];
+            return [this.get_pos(), qm_add(qm_scale(v2(this.bounds.x * Math.abs(this.scale.x), this.bounds.y * Math.abs(this.scale.y)), 0.5), ext)];
         }
 
         public get_local_transform(): mat {
@@ -534,7 +534,8 @@ namespace g {
                         if (hit) {
                             hits.push(new qf_hit_result(hit[0], hit[1], actor));
                         } else {
-                            hits.push(new qf_hit_result(start, qm_unit(qm_sub(start, end)), actor));
+                            let dir = qm_sub(start, end);
+                            hits.push(new qf_hit_result(start, qm_mag_sqr(dir) ? qm_unit(dir) : qm_up, actor));
                         }
                     }
                 }
@@ -1373,23 +1374,23 @@ namespace g {
             // #DEBUG-END
         }
 
-        export namespace mouse
-        {
-            export const pos = v2();
+        // export namespace mouse
+        // {
+        //     export const pos = v2();
 
-            export function on_move(e: MouseEvent)
-            {
-                pos.x = e.offsetX;
-                pos.y = e.offsetY;
-                e.stopPropagation();
-            }
-        }
+        //     export function on_move(e: MouseEvent)
+        //     {
+        //         pos.x = e.offsetX;
+        //         pos.y = e.offsetY;
+        //         e.stopPropagation();
+        //     }
+        // }
 
         export function init(canvas: HTMLCanvasElement)
         {
             window.addEventListener('keydown', keyboard.on_keydown);
             window.addEventListener('keyup', keyboard.on_keyup);
-            canvas.addEventListener('mousemove', mouse.on_move);
+            // canvas.addEventListener('mousemove', mouse.on_move);
         }
     }
 
@@ -1611,7 +1612,8 @@ namespace g {
             const ts = this.tile_size;
             const half_ts = qm_scale(v2(ts, ts), 0.5);
             const half_size = qm_scale(size, 0.5);
-            const dir = qm_unit(qm_sub(end, start));
+            let dir = qm_sub(end, start);
+            if (qm_mag_sqr(dir)) dir = qm_unit(dir);
 
             let hit_result: qm_line_trace_result;
 
@@ -1622,10 +1624,15 @@ namespace g {
                 for (let iy = y - ext.y; iy <= y + ext.y; ++iy) {
                     for (let ix = x - ext.x; ix <= x + ext.x; ++ix) {
                         let tile_center = qm_scale(v2(ix + 0.5, iy + 0.5), ts);
-                        let tile_dir = qm_unit(qm_sub(tile_center, start));
 
-                        if (qm_dot(dir, tile_dir) < -0.5) {
-                            continue;
+                        // dont check tiles behind trace dir
+                        {
+                            let tile_dir = qm_sub(tile_center, start);
+                            if (qm_mag_sqr(tile_dir) > 0) {
+                                if (qm_dot(dir, qm_unit(tile_dir)) < -0.5) {
+                                    continue;
+                                }
+                            }
                         }
 
                         // #DEBUG-BEGIN
@@ -1893,7 +1900,7 @@ namespace g {
                 if (qm_mag(dir) <= radious) {
                     let m = a.getcmp(qi_ai_movement)[0];
                     if (m) {
-                        m.vel = qm_clamp_mag(dir, force, 0);
+                        m.vel = qm_clamp_mag(dir, force);
                     }
                     if (damage > 0) {
                         a.on_take_damage.broadcast(new qf_damage_event(damage, src, qm_unit(qm_scale(dir, -1))));
@@ -2196,7 +2203,8 @@ namespace g {
             [this.movement] = this.owner.getcmp(qc_player_movement);
             [this.sprite]   = this.owner.getcmp(qc_anim_sprite_component);
             [this.stats] = this.owner.getcmp(qc_label_component);
-            [this.weapon_sprite] = this.owner.getcmp_byname('weapon_sprite') as qc_sprite_component[];
+            this.weapon_sprite = this.owner.getcmp(qc_sprite_component)[1];
+
             this.owner.on_take_damage.bind(this.take_damage, this);
             this.set_fire_rate(this.fire_rate);
 
@@ -2329,7 +2337,7 @@ namespace g {
 
         protected wave_def: wave_spawn_def[][] = [
             // #DEBUG-BEGIN
-            [[spawn_goblin, 1], [spawn_bat, 0]],
+            // [[spawn_goblin, 1], [spawn_bat, 0]],
             // #DEBUG-END
             [[spawn_slime, 2], [spawn_bat, 1]],
             [[spawn_slime, 4], [spawn_bat, 2]],
@@ -2339,13 +2347,21 @@ namespace g {
             [],
             [[spawn_boss1, 1]],
             [],
-            [[spawn_goblin, 2], [spawn_bat, 4]],
-            [[spawn_goblin, 4], [spawn_bat, 4]],
+            [[spawn_goblin, 2], [spawn_bat, 0]],
+            [[spawn_goblin, 4], [spawn_bat, 2]],
             [],
             [[spawn_goblin, 2], [spawn_boss1, 1]],
-            [[spawn_goblin, 8], [spawn_bat, 0]],
+            [[spawn_goblin, 6], [spawn_bat, 2]],
             [],
-            [[spawn_boss1, 2]] 
+            [[spawn_boss1, 2]],
+            [],
+            [[spawn_goblin, 2], [spawn_boss1, 2]],
+            [[spawn_goblin, 4], [spawn_boss1, 4]],
+            [],
+            [[spawn_boss1, 2], [spawn_slime, 8]],
+            [[spawn_boss1, 8], [spawn_slime, 2]],
+            [],
+            [[spawn_goblin, 10]]
         ];
         protected center_label: qc_label_component;
         protected print_timer_handle: qf_timer_event;
@@ -2560,8 +2576,8 @@ namespace g {
         }
 
         protected update(): void {
-            if (this.mov && this.spr) {
-                this.spr.flip_x = this.mov.vel.x > 0;
+            if (this.mov && this.mov.input.x != 0 && this.spr) {
+                this.spr.scale.x = this.mov.input.x > 0 ? -1 : 1;
             }
             if (this.overlaps_target() && !this.atk_lock) {
                 let dir = qm_sub(this.target.get_pos(), this.owner.get_pos());
@@ -2647,10 +2663,13 @@ namespace g {
         public dimishing_return = 1;
         public shoot_interval = 0;
 
+        protected weapon_spr: qc_sprite_component;
+
         public begin_play() {
             super.begin_play()
             this.think_event = this.get_timer().every(0.033, this.think, this);
             if (this.shoot_interval > 0) {
+                this.weapon_spr = this.owner.getcmp(qc_sprite_component)[1];
                 this.get_timer().every(this.shoot_interval, this.try_fire, this);
             }
         }
@@ -2658,6 +2677,10 @@ namespace g {
         public think(delta: number) {
             if (this.atk_lock) {
                 return;
+            }
+            if (this.weapon_spr) {
+                // this.weapon_spr.flip_x = this.mov.vel.x > 0;
+                this.weapon_spr.rot = Math.PI / 3;
             }
 
             this.dimishing_return = qm_clamp(this.dimishing_return + 0.01, 0, 1);
@@ -2675,12 +2698,15 @@ namespace g {
 
         public take_damage(e: qf_damage_event): void {
             this.think_event.fire_in = 0.5 * this.dimishing_return;
-            this.mov.input = v2();
-            this.mov.vel.x -= 200 * e.dir.x * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
-            this.mov.vel.y -= 160 * this.dimishing_return * (this.mov.flying ? 0 : 1);
-
+            this.knock_back(e.dir);
             this.dimishing_return = qm_clamp(this.dimishing_return - 0.1, 0, 1);
             super.take_damage(e);
+        }
+
+        public knock_back(dir: qm_vec, force: number = 160) {
+            this.mov.input = v2();
+            this.mov.vel.x -= force * dir.x * this.dimishing_return * (this.mov.flying ? 0.5 : 1);
+            this.mov.vel.y -= force * this.dimishing_return * (this.mov.flying ? 0 : 1);
         }
 
         public stop_moving(period: number = 1) {
@@ -2697,17 +2723,19 @@ namespace g {
 
             let w = this.get_world();
 
-            let this_pos = this.owner.get_pos();
-            let trg_pos = this.target.get_pos();
-            let dir = qm_sub(trg_pos, this_pos);
+            let my_pos = this.owner.get_pos();
+            let dir = v2c(this.mov.vel.x > 0 ? qm_right : qm_left);
 
-            let hit = this.get_world().sweep_aabb(this_pos, qm_add(this_pos, v2(dir.x * 1000, 0)), v2(2, 2), qf_cc.player)
+            let hit = this.get_world().sweep_aabb(my_pos, qm_add(my_pos, v2(dir.x * 1000, 0)), v2(2, 2), qf_cc.player)
             if (hit) {
                 this.stop_moving();
+                this.weapon_spr.rot = 0;
+                let muzzle_pos = qm_add(this.weapon_spr.get_pos(), qm_scale(qm_unit(dir), 3));
+                let shoot_dir = qm_clamp_mag(v2(dir.x, 0), 200);
 
                 this.get_timer().delay(0.5, _ => {
-                    let shoot_dir = qm_clamp_mag(v2(dir.x, 0), 200);
-                    spawn_bullet(w, this_pos, shoot_dir, this.owner, { lifespan: 3, gravity: 0, cc: qf_cc.player | qf_cc.geom });
+                    spawn_bullet(w, muzzle_pos, shoot_dir, this.owner, { lifespan: 3, gravity: 0, cc: qf_cc.player | qf_cc.geom });
+                    this.knock_back(qm_unit(shoot_dir));
                 }, this);
             }
         }
@@ -2784,6 +2812,11 @@ namespace g {
         r.sequences['walk'].set_duration(0.15);
         r.offset.y = -5;
         r.play('walk');
+
+        let pistol = qf_attach_prim(a, new qc_sprite_component(), {x: -8, y: 0});
+        pistol.parent = r;
+        // pistol.flip_x = true;
+        pistol.sprite = g_character_spritesheet.get_sprite(19);
 
         let mov = qf_attach_cmp(a, new qi_ai_movement());
         // mov.jump_vel *= 0.9;
@@ -3114,7 +3147,7 @@ namespace g {
         
         qf_attach_prim(a, s, {x, y, width: 10, height: 14, coll_mask: qf_cc.player, root: true});
 
-        let pistol = qf_attach_prim(a, new qc_sprite_component(), {x: 10, y: 0, name: 'weapon_sprite'});
+        let pistol = qf_attach_prim(a, new qc_sprite_component(), {x: 10, y: 0});
         pistol.parent = s;
         pistol.flip_x = true;
         pistol.sprite = g_character_spritesheet.get_sprite(18);
