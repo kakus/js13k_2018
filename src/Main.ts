@@ -1352,12 +1352,21 @@ namespace g {
                     } else if (get_state(' ').is_down) {
                         on_keyup(new q_fake_keyboard_event(' '));
                     }
+
                     if (gp.buttons[2].pressed) {
                         on_keydown(new q_fake_keyboard_event('z'));
                     } else if (gp.buttons[7].pressed) {
                         on_keydown(new q_fake_keyboard_event('z'));
+                    } else if (gp.buttons[6].pressed) {
+                        on_keydown(new q_fake_keyboard_event('z'));
                     } else if (get_state('z').is_down) {
                         on_keyup(new q_fake_keyboard_event('z'));
+                    }
+
+                    if (gp.buttons[1].pressed) {
+                        on_keydown(new q_fake_keyboard_event('x'));
+                    } else if (get_state('x').is_down) {
+                        on_keyup(new q_fake_keyboard_event('x'));
                     }
 
                     if (gp.axes[0] > 0.5) {
