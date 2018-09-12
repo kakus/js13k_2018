@@ -40,7 +40,8 @@ namespace g {
     function qm_unit(a: qm_vec) { qu_assert(a.x != 0 || a.y != 0); let m = qm_mag(a); return qm_scale(a, 1/m); }
     function qm_clamp_mag(a: qm_vec, min: number, max: number = min) {
         let m = qm_mag(a);
-        return m < min ? qm_scale(qm_unit(a), min) :
+        return m === 0 ? a :
+               m < min ? qm_scale(qm_unit(a), min) :
                m > max ? qm_scale(qm_unit(a), max) :
                          a;
     }
@@ -537,19 +538,24 @@ namespace g {
                 if (ignore && qu_contains(ignore, actor)) {
                     continue;
                 }
-                if (actor.root) {
+                if (actor.root && (actor.root.collision_mask & channel) ) {
                     let actor_aabb = actor.root.get_aabb(half_size);
-                    if ((actor.root.collision_mask & channel) && qm_overlap_aabb(area, actor_aabb)) {
+                    if (qm_overlap_aabb(area, actor_aabb)) {
                         let hit = qm_line_trace_aabb(start, end, actor_aabb);
                         if (hit) {
                             hits.push(new qf_hit_result(hit[0], hit[1], actor));
-                        } else {
+                        } 
+                        else if (qm_overlap_point(start, actor_aabb)) {
                             let dir = qm_sub(start, end);
                             hits.push(new qf_hit_result(start, qm_mag_sqr(dir) ? qm_unit(dir) : qm_up, actor));
                         }
                     }
                 }
             }
+
+            // #DEBUG-BEGIN
+            // g_world_sweep_hits.push(hits);
+            // #DEBUG-END
 
             return qu_greatest_element(hits, (a, b) => {
                 return qm_mag_sqr(qm_sub(a.pos, start)) > qm_mag_sqr(qm_sub(b.pos, start));
@@ -1282,7 +1288,7 @@ namespace g {
                        'ArrowRight' |
                        'ArrowUp' |
                        'ArrowDown' |
-                       'z' | 'x' | ' ' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8';
+                       'z' | 'x' | ' ' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
 
             type q_keyboard_event = KeyboardEvent | q_fake_keyboard_event;
 
@@ -1992,8 +1998,8 @@ namespace g {
         public wants_tick = true;
         public start_radious = 10;
         public end_radious = 400;
-        public expand_durtation = 0.45;
-        public slomo_duration = 0.35;
+        public expand_durtation = 0.25;
+        public slomo_duration = 0.13;
         protected elapsed = 0;
 
         public begin_play(): void {
@@ -2004,7 +2010,7 @@ namespace g {
             this.elapsed += delta;
 
             if (this.elapsed < this.slomo_duration) {
-                const hs = this.slomo_duration / 1.05;
+                const hs = 0.1;
                 g_time_dilation = qm_clamp(1 - this.elapsed / hs, 0.01, 1);
             }
             if (this.elapsed > this.slomo_duration) {
@@ -2172,6 +2178,7 @@ namespace g {
         public rotate_root = true;
         public bounce_off_walls = false;
         public bounce_factor = 0.5; // 1 = no velocity loss
+        public homming_strength = 0;
         public instigator: qf_actor = null;
         public collision_channel: qf_cc = qf_cc.all;
         public on_hit = new qf_multicast_delegate<(hit_result: qf_hit_result, bullet: this) => void>();
@@ -2187,6 +2194,10 @@ namespace g {
         {
             let r = this.owner.root;
             let w = this.owner.world;
+
+            if (this.homming_strength > 0) {
+                this.apply_homming_effect();
+            }
 
             this.vel = qm_add(this.vel, qm_scale(this.acc, delta));
             let ds = qm_scale(this.vel, delta);
@@ -2216,6 +2227,29 @@ namespace g {
                 }
             }
         }
+
+        protected apply_homming_effect() {
+            let best_pos: qm_vec;
+            let best_dot = 0.9
+
+            let my_pos = this.owner.get_pos();
+            let unit_vel = qm_unit(this.vel);
+            for (let a of this.owner.world.actors) {
+                if (a.root && (a.root.collision_mask & this.collision_channel)) {
+                    let p = a.get_pos();
+                    let d = qm_sub(p, my_pos);
+                    let dot = qm_dot(unit_vel, qm_unit(d));
+                    if (dot > best_dot) {
+                        best_pos = p
+                        best_dot = dot;
+                    }
+                }
+            }
+
+            if (best_pos) {
+                this.acc.y = qm_sub(best_pos, my_pos).y * this.homming_strength * ((1 - best_dot) * 10);
+            }
+        }
     }
 
     class qc_player_controller extends qf_component_base
@@ -2231,17 +2265,18 @@ namespace g {
         public bullets_per_shoot = 1;
         public explosion_chance = 0.1;
         public bullet_damage = 1;
+        public homming_effect = 0;
 
         // other setup
         public gems_per_kill = 3;
-        public skill_cooldown = 5;
+        public skill_cooldown = 8;
 
-        public life = 2;
+        public life = 3;
         public gem_count = 0;
         public should_take_damage = true;
         public wants_tick = true;
 
-        protected fire_rate = 4;
+        protected fire_rate = 3;
         protected fire_delegate: Function;
         protected skill_lock = false;
         protected timer = new qf_timer();
@@ -2266,6 +2301,8 @@ namespace g {
             qs_input.keyboard.bind_keydown('5', _ => qm_rnd_select(spawn_bat, spawn_goblin)(g_world, v2(30, 30)), this);
             qs_input.keyboard.bind_keydown('6', _ => this.life++, this);
             qs_input.keyboard.bind_keydown('7', _ => this.gem_count++, this);
+            qs_input.keyboard.bind_keydown('8', _ => this.homming_effect += 3, this);
+            qs_input.keyboard.bind_keydown('9', _ => this.bullet_speed += 50, this);
             // #DEBUG-END
         }
 
@@ -2295,7 +2332,13 @@ namespace g {
                 this.fire_delegate();
             }
 
-            this.stats.set_text(`lives: ${this.life}\ngems:  ${this.gem_count}\nwave:  ${g_stage}`);
+            this.stats.set_text(
+                `lives: ${this.life}\ngems:  ${this.gem_count}\nwave:  ${g_stage}` 
+                // #DEBUG-BEGIN
+                + `\nslomo: ${g_time_dilation}`
+                + `\nhommi: ${this.homming_effect}`
+                // #DEBUG-END
+            );
             this.stats.pos = qm_add(v2(20, 20), qm_scale(this.stats.bounds, 0.5));
         }
         
@@ -2391,7 +2434,8 @@ namespace g {
                     {
                         lifespan: 0.3, gravity: 0, cc: qf_cc.enemy | qf_cc.geom,
                         damage: this.bullet_damage,
-                        explosion_chance: this.explosion_chance
+                        explosion_chance: this.explosion_chance,
+                        homming_strenght: g_time_dilation < 0.02 ? 5e4 : this.homming_effect
                     });
                 dir = qm_rotate(dir, step);
             }
@@ -3003,10 +3047,12 @@ namespace g {
         return a;
     }
 
-    function spawn_freeze_wave(world: qf_world, {x, y, duration = 0.15}): qf_actor {
+    function spawn_freeze_wave(world: qf_world, {x, y}, duration?: number): qf_actor {
         let a = world.spawn_actor();
         let r = qf_attach_prim(a, new qc_wave_component(), {x, y, root: true});
-        r.slomo_duration = duration;
+        if (duration) {
+            r.slomo_duration = duration;
+        }
         return a;
     }
 
@@ -3021,7 +3067,7 @@ namespace g {
     function spawn_shop_item(world: qf_world, {x, y, item = qg_item_type.max_none}): qf_actor {
         let a = world.spawn_actor();
         let s = qf_attach_prim(a, new qc_sprite_component(), {x, y, width: 14, height: 16, root: true});
-        s.sprite = g_character_spritesheet.get_sprite(34);
+        s.sprite = g_tile_spritesheet.get_sprite(43);
 
         let cost = get_item_cost(item);
         cost += Math.sign(cost) * (5 * ((g_stage/3)|0));
@@ -3039,7 +3085,7 @@ namespace g {
         p2.bounds = [v2(x, y - 40), v2(10, 10)];
         p2.on_overlap_begins.bind(_ => {
             if (g_player_controller.gem_count >= cost) {
-                spawn_freeze_wave(world, {x, y});
+                spawn_freeze_wave(world, {x, y}, 0.11);
                 g_player_controller.apply_upgrade(item);
                 if (a.is_valid()) {
                     a.destroy();
@@ -3095,6 +3141,7 @@ namespace g {
     export var g_draw_id = false;
     export var g_draw_bounds = false;
     export var g_draw_paths = false;
+    export var g_world_sweep_hits: qf_hit_result[][] = [];
 
     class debug_draw_collisions extends qf_scene_component
     {
@@ -3153,6 +3200,20 @@ namespace g {
                 }
             }
 
+            for (let hits of g_world_sweep_hits) {
+                for (let {normal, pos} of hits) {
+                    ctx.strokeRect(pos.x - 2, pos.y - 2, 2, 2);
+                    ctx.beginPath();
+                    ctx.moveTo(pos.x, pos.y);
+                    ctx.lineTo(pos.x + normal.x * 10, pos.y + normal.y * 10);
+                    ctx.strokeStyle = 'green';
+                    ctx.stroke();
+                }
+            }
+            while (g_world_sweep_hits.length > 1000) {
+                g_world_sweep_hits.shift();
+            }
+
             ctx.strokeStyle = 'yellow';
             for (let path of qi_g_paths) {
                 if (path.length == 0) continue;
@@ -3189,7 +3250,7 @@ namespace g {
     // #DEBUG-END
 
     function spawn_bullet(world: qf_world, loc: qm_vec, dir: qm_vec, instigator: qf_actor,
-        {lifespan = 0, gravity = 1000, cc = qf_cc.all, damage = 1, explosion_chance = 0}): qf_actor
+        {lifespan = 0, gravity = 1000, cc = qf_cc.all, damage = 1, explosion_chance = 0, homming_strenght = 0}): qf_actor
     {
         let a = world.spawn_actor();
 
@@ -3208,6 +3269,7 @@ namespace g {
         p.instigator = instigator;
         p.collision_channel = cc;
         p.damage = damage;
+        p.homming_strength = homming_strenght;
 
         p.on_hit.bind(hit => {
             if (hit.actor) {
@@ -3219,7 +3281,6 @@ namespace g {
         }, a);
 
         qf_attach_cmp(a, p);
-
         return a;
     }
 
