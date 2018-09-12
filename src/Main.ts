@@ -1772,7 +1772,7 @@ namespace g {
         public moving_left = false;
         public wants_tick = true;
 
-        public trace_wall(dist = 2): qm_line_trace_result {
+        public trace_wall(dist: number): qm_line_trace_result {
             let r = this.owner.root;
             let g = this.owner.world.geometry as qf_tile_geometry;
 
@@ -1834,6 +1834,23 @@ namespace g {
             r.pos.y = end.y;
 
             this.on_ground = !!this.trace_ground();
+        }
+    }
+
+    class qc_circle_component extends qf_scene_component {
+        public radious = 5;
+        public angle = 0;
+        public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.arc(0, 0, this.radious, 0, this.angle);
+            ctx.closePath();
+            
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#000';
+            ctx.stroke();
+            ctx.fillStyle = '#fff';
+            ctx.fill();
         }
     }
 
@@ -2288,13 +2305,13 @@ namespace g {
             }
             this.skill_lock = true;
 
-            let bar = qf_attach_prim(this.owner, new qc_rect_component(), {y: -18, height: 3, width: 30});
+            let bar = qf_attach_prim(this.owner, new qc_circle_component(), {y: -18});
             bar.parent = this.owner.root;
-            let elapsed = 0, dt = 0.2;
+            let elapsed = 0, dt = 0.05;
             this.get_timer().every(dt, _ => {
                 elapsed += dt;
                 if (elapsed < this.skill_cooldown) {
-                    bar.bounds.x = 30 * (1 - (elapsed / this.skill_cooldown));
+                    bar.angle = Math.PI * 2 * (1 - (elapsed / this.skill_cooldown));
                 } else {
                     bar.destroy();
                     this.skill_lock = false;
