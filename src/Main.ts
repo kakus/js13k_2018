@@ -2108,7 +2108,7 @@ namespace g {
                     this.acc.y = -speed * 100;
                 }
                 else if (move_left || move_right) {
-                    let wall_trace = this.trace_wall(5);
+                    let wall_trace = this.trace_wall(7);
                     if (wall_trace) {
                         let [p, n] = wall_trace;
                         let r = this.owner.root;
