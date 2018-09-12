@@ -2018,19 +2018,21 @@ namespace g {
         public on_overlap_ends = new qf_multicast_delegate();
 
         public lifespan = 0;
-        public elapsed = 0;
         public blink = false;
         public wants_tick = true;
         public bounds: qm_aabb;
 
         protected last_frame_overlap = false;
+        protected timer = new qf_timer();
 
         public begin_play(): void {
             // this.get_timer().every(0.05, this.update, this);
             if (this.lifespan > 0) {
                 this.get_timer().delay(this.lifespan, this.owner.destroy, this.owner);
                 if (this.blink) {
-                    this.get_timer().every(0.1, this.blink_impl, this);
+                    this.get_timer().delay(Math.max(this.lifespan - 1, 0), _ => {
+                        this.timer.every(0.1, this.blink_impl, this);
+                    }, this);
                 }
             }
         }
@@ -2038,7 +2040,8 @@ namespace g {
         public tick(delta: number) {
             let r = this.owner.root;
             let w = this.get_world();
-            this.elapsed += delta;
+
+            this.timer.tick(delta * 1/g_time_dilation);
             
             let o = w.overlap(this.bounds ? this.bounds : r.get_aabb(), qf_cc.player);
             if (o[0] && !this.last_frame_overlap) {
@@ -2054,9 +2057,7 @@ namespace g {
 
         public blink_impl() {
             let r = this.owner.root;
-            if (this.lifespan > 0 && (this.lifespan - this.elapsed) < 1) {
-                r.visible = !r.visible;
-            }
+            r.visible = !r.visible;
         }
     }
 
@@ -2973,13 +2974,13 @@ namespace g {
 
         let m = qf_attach_cmp(a, new qc_projectile_movement());
         m.bounce_off_walls = true;
-        m.bounce_factor = 0.8;
+        m.bounce_factor = 0.6;
         m.rotate_root = false;
         m.collision_channel = qf_cc.geom;
 
         let p = qf_attach_cmp(a, new qc_pickable_component());
         p.on_overlap_begins.bind(_ => { g_player_controller.gem_count += 1; a.destroy(); }, p);
-        p.lifespan = 4;
+        p.lifespan = 5;
         p.blink = true;
 
         return a;
