@@ -2244,6 +2244,7 @@ namespace g {
             qs_input.keyboard.bind_keydown('1', _ => g_world.actors.forEach(a => a.getcmp(qc_enemy_controller)[0] ? a.on_take_damage.broadcast(new qf_damage_event(9999, this.owner, qm_up)) : 1), this);
             qs_input.keyboard.bind_keydown('2', _ => reset(), this);
             qs_input.keyboard.bind_keydown('3', _ => g_game_mode.spawn_wave(), this);
+            qs_input.keyboard.bind_keydown('4', _ => g_stage++, this);
             qs_input.keyboard.bind_keydown('5', _ => qm_rnd_select(spawn_bat, spawn_goblin)(g_world, v2(30, 30)), this);
             qs_input.keyboard.bind_keydown('6', _ => this.life++, this);
             qs_input.keyboard.bind_keydown('7', _ => this.gem_count++, this);
@@ -2891,7 +2892,7 @@ namespace g {
         r.offset.y = -5;
         r.play('walk');
 
-        let pistol = qf_attach_prim(a, new qc_sprite_component(), {x: -8, y: 0});
+        let pistol = qf_attach_prim(a, new qc_sprite_component(), {x: -8, y: -2});
         pistol.parent = r;
         // pistol.flip_x = true;
         pistol.sprite = g_character_spritesheet.get_sprite(19);
@@ -2932,12 +2933,12 @@ namespace g {
     {
         let a = world.spawn_actor();
         let r = qf_attach_prim(a, new qc_anim_sprite_component(), {x, y, coll_mask: qf_cc.enemy, height: 14, width: 13, root: true});
-        let w = r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [37, 38]);
+        let w = r.sequences['walk'] = new qr_sprite_sequence(g_character_spritesheet, [21, 22]);
         w.loop = true;
         w.set_duration(0.25);
         r.play('walk');
         r.offset.y = -1;
-        r.sequences['fire'] = new qr_sprite_sequence(g_character_spritesheet, [36]);
+        r.sequences['fire'] = new qr_sprite_sequence(g_character_spritesheet, [20]);
         // r.scale = v2(2, 2);
 
         let mov = qf_attach_cmp(a, new qc_ai_movement());
@@ -2968,7 +2969,7 @@ namespace g {
     function spawn_coin(world: qf_world, {x, y}): qf_actor {
         let a = world.spawn_actor();
         let r = qf_attach_prim(a, new qc_sprite_component(), {x, y, width: 8, height: 7, root: true});
-        r.sprite = g_character_spritesheet.get_sprite(33);
+        r.sprite = g_tile_spritesheet.get_sprite(42);
 
         let m = qf_attach_cmp(a, new qc_projectile_movement());
         m.bounce_off_walls = true;
@@ -3253,7 +3254,7 @@ namespace g {
 
     function spawn_tile(actor: qf_actor, {x, y}, id: string) {
         let s = qf_attach_prim(actor, new qc_sprite_component(), {x, y, width: 10, height: 10});
-        s.sprite = g_tile_spritesheet.get_sprite(9*8 + parseInt(id, 16));
+        s.sprite = g_tile_spritesheet.get_sprite(9*3 + 6 + parseInt(id, 16));
     }
 
     function parse_level(data: string, world: qf_world): void
