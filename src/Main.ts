@@ -739,22 +739,31 @@ namespace g {
 	
 		letters: {
 			
-			'+': [
-				0, 0, 0,
-				0, 1, 0,
-				1, 1, 1,
-				0, 1, 0,
-				0, 0, 0
-			],
-			
 			'-': [
 				0, 0, 0,
 				0, 0, 0,
 				1, 1, 1,
 				0, 0, 0,
 				0, 0, 0
+            ],
+            
+            ':': [
+				0, 0, 0,
+				0, 1, 0,
+				0, 0, 0,
+				0, 1, 0,
+				0, 0, 0
 			],
 			
+            // #DEBUG-BEGIN
+			'+': [
+				0, 0, 0,
+				0, 1, 0,
+				1, 1, 1,
+				0, 1, 0,
+				0, 0, 0
+            ],
+
 			'.': [
 				0, 0, 0,
 				0, 0, 0,
@@ -770,15 +779,7 @@ namespace g {
 				0, 1, 0,
 				1, 0, 0
 			],
-			
-			':': [
-				0, 0, 0,
-				0, 1, 0,
-				0, 0, 0,
-				0, 1, 0,
-				0, 0, 0
-			],
-			
+            
 			'?': [
 				1, 1, 0,
 				0, 0, 1,
@@ -793,8 +794,8 @@ namespace g {
 				1, 1, 1,
 				0, 1, 0,
 				0, 0, 0
-			],
-			
+            ],
+            // #DEBUG-END
 			
 			'0': [
 				1, 1, 1,
@@ -1288,7 +1289,7 @@ namespace g {
                        'ArrowRight' |
                        'ArrowUp' |
                        'ArrowDown' |
-                       'z' | 'x' | ' ' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
+                       'z' | 'x' | 'p' | ' ' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
 
             type q_keyboard_event = KeyboardEvent | q_fake_keyboard_event;
 
@@ -1320,11 +1321,10 @@ namespace g {
             }
 
             export function on_keydown(e: q_keyboard_event) {
-                // #DEBUG-BEGIN
                 if (e instanceof KeyboardEvent) {
                     g_poll_gamepad = false;
                 }
-                // #DEBUG-END
+
                 let s = get_state(e.key);
                 if (s.is_down) return;
                 s.is_down = true;
@@ -1343,7 +1343,6 @@ namespace g {
                 constructor(public key: key_type) { }
                 preventDefault() { }
             }
-            // #DEBUG-BEGIN
             let g_poll_gamepad = false;
             export function poll_gamepad() {
                 let gp = navigator.getGamepads()[0];
@@ -1387,7 +1386,6 @@ namespace g {
                     }
                 }
             }
-            // #DEBUG-END
         }
 
         // export namespace mouse
@@ -1860,15 +1858,15 @@ namespace g {
         }
     }
 
-    class qc_rect_component extends qf_scene_component {
-        public color: string = '#fff';
-        public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
-            ctx.fillStyle = '#000'
-            ctx.fillRect(-this.bounds.x/2, -this.bounds.y/2, this.bounds.x, this.bounds.y);
-            ctx.fillStyle = this.color;
-            ctx.fillRect(-this.bounds.x/2 + 1, -this.bounds.y/2 + 1, this.bounds.x - 2, this.bounds.y - 2);
-        }
-    }
+    // class qc_rect_component extends qf_scene_component {
+    //     public color: string = '#fff';
+    //     public render_c2d_impl(ctx: CanvasRenderingContext2D): void {
+    //         ctx.fillStyle = '#000'
+    //         ctx.fillRect(-this.bounds.x/2, -this.bounds.y/2, this.bounds.x, this.bounds.y);
+    //         ctx.fillStyle = this.color;
+    //         ctx.fillRect(-this.bounds.x/2 + 1, -this.bounds.y/2 + 1, this.bounds.x - 2, this.bounds.y - 2);
+    //     }
+    // }
 
     class qc_sprite_component extends qf_scene_component {
         public sprite = new qr_sprite_data(null, null, qm_zero, v2(10, 10));
@@ -2001,6 +1999,7 @@ namespace g {
         public expand_durtation = 0.25;
         public slomo_duration = 0.13;
         protected elapsed = 0;
+        protected finished = false;
 
         public begin_play(): void {
             apply_radial_damage(this.owner, 600, 99999, 0);
@@ -2013,7 +2012,8 @@ namespace g {
                 const hs = 0.1;
                 g_time_dilation = qm_clamp(1 - this.elapsed / hs, 0.01, 1);
             }
-            if (this.elapsed > this.slomo_duration) {
+            if (this.elapsed > this.slomo_duration && !this.finished) {
+                this.finished = true;
                 g_time_dilation = 1;
             }
             if (this.elapsed > this.expand_durtation) {
@@ -2292,6 +2292,7 @@ namespace g {
             this.set_fire_rate(this.fire_rate);
 
             qs_input.keyboard.bind_keydown('x', this.activate_skill, this);
+            qs_input.keyboard.bind_keydown('p', _ => alert(`pause`), this);
 
             // #DEBUG-BEGIN
             qs_input.keyboard.bind_keydown('1', _ => g_world.actors.forEach(a => a.getcmp(qc_enemy_controller)[0] ? a.on_take_damage.broadcast(new qf_damage_event(9999, this.owner, qm_up)) : 1), this);
@@ -2335,8 +2336,8 @@ namespace g {
             this.stats.set_text(
                 `lives: ${this.life}\ngems:  ${this.gem_count}\nwave:  ${g_stage}` 
                 // #DEBUG-BEGIN
-                + `\nslomo: ${g_time_dilation}`
-                + `\nhommi: ${this.homming_effect}`
+                // + `\nslomo: ${g_time_dilation}`
+                // + `\nhommi: ${this.homming_effect}`
                 // #DEBUG-END
             );
             this.stats.pos = qm_add(v2(20, 20), qm_scale(this.stats.bounds, 0.5));
@@ -2368,6 +2369,7 @@ namespace g {
             if (!this.should_take_damage || g_time_dilation < 1) {
                 return;
             }
+            this.should_take_damage = false;
 
             // knockback
             this.movement.vel.x += e.dir.x * 100;
@@ -2381,6 +2383,8 @@ namespace g {
 
                 // just for shake
                 spawn_explosion(this.get_world(), {x:-100, y:-100, duration: 0.1});
+                // invicibility frame
+                this.get_timer().delay(.5, _ => this.should_take_damage = true, this);
             }
             else {
                 this.handle_death();
@@ -2454,7 +2458,7 @@ namespace g {
                 case qg_item_type.bullet_range_upgrade: this.bullet_speed += 50; return;
                 case qg_item_type.fire_rate_upgrade: this.set_fire_rate(this.fire_rate + 2); return;
                 case qg_item_type.life_upgrade: this.life += 1; return;
-                case qg_item_type.coin_drop_upgrade: this.gems_per_kill += 2; return;
+                // case qg_item_type.coin_drop_upgrade: this.gems_per_kill += 2; return;
                 case qg_item_type.finish_shopping: g_game_mode.finish_shopping(); return;
             }
             qu_assert(false);
@@ -2506,8 +2510,8 @@ namespace g {
             [this.center_label] = this.owner.getcmp(qc_label_component);
             qi_g_on_enemy_killed.bind(this.on_enemy_killed, this);
             this.get_timer().delay(2, this.spawn_wave, this);
-            this.print(`game title\n\ngame by kakus\njs13k 2018`, 5);
-            this.get_timer().delay(5, _ => this.print(`controls\narrows + z x`, 10), this);
+            this.print(` bulletcraft\n\ngame by kakus\n js13k 2018`, 5);
+            this.get_timer().delay(5, _ => this.print(`controls\narrows + z x\nxbox gamepad`, 10), this);
         }
 
         public print(msg: string, lifespan: number = 0) {
@@ -2551,7 +2555,7 @@ namespace g {
                 for (let pos of g_item_positions) {
                     this.spawned_actors.push(spawn_shop_item(w, {x: pos.x, y: pos.y, item: upg[idx]}));
                     upg.splice(idx, 1);
-                    idx = qm_rnd(0, upg.length - 1) | 0;
+                    idx = qm_rnd(0, upg.length - 0.01) | 0;
                 }
                 let v = spawn_vendor(w, g_npc_positions[0]);
                 this.spawned_actors.push(v);
@@ -3376,7 +3380,7 @@ namespace g {
         // bullet_knockback_upgrade,
 
         life_upgrade,
-        coin_drop_upgrade,
+        // coin_drop_upgrade,
         finish_shopping,
         max_none
     }
@@ -3391,7 +3395,7 @@ namespace g {
             // case qg_item_type.bullet_knockback_upgrade: return 'increased bullet knockback';
 
             case qg_item_type.life_upgrade:             return 'life';
-            case qg_item_type.coin_drop_upgrade:        return 'increased coin drop';
+            // case qg_item_type.coin_drop_upgrade:        return 'increased coin drop';
             case qg_item_type.finish_shopping:          return 'finish shopping';
         }
     }
@@ -3405,7 +3409,7 @@ namespace g {
             // case qg_item_type.bullet_knockback_upgrade:return 80;
 
             case qg_item_type.life_upgrade:            return 10;
-            case qg_item_type.coin_drop_upgrade:       return 10;
+            // case qg_item_type.coin_drop_upgrade:       return 10;
             case qg_item_type.finish_shopping:         return -5;
         }
     }
@@ -3419,9 +3423,7 @@ namespace g {
 
     function tick()
     {
-        // #DEBUG-BEGIN
         qs_input.keyboard.poll_gamepad();
-        // #DEBUG-END
 
         g_world.tick(0.016 * g_time_dilation);
 
@@ -3441,7 +3443,7 @@ namespace g {
         g_time_dilation = 1;
         
         g_world = new qf_world();
-        g_world.geometry = new qf_tile_geometry(36, 18, 14);
+        g_world.geometry = new qf_tile_geometry(35, 18, 14);
 
         parse_level(
 `00000000000000000000000000000000000
@@ -3461,7 +3463,7 @@ namespace g {
 1             1010101             0
 1                                 0
 1  s             @             s  0
-000000000000000000001111111111111111`
+00000000000000000000111111111111111`
                     , g_world)
 
         spawn_game_mode(g_world, qm_zero);
