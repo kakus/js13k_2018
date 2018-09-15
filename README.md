@@ -1,1 +1,1 @@
-![foo](/url "https://raw.githubusercontent.com/kakus/js13k_2018/master/promo/stage-clear.gif")
+![foo](/url " https://github.com/kakus/js13k_2018/blob/master/promo/stage-clear.gif")
